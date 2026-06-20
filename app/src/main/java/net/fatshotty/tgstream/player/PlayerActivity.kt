@@ -210,7 +210,7 @@ class PlayerActivity : AppCompatActivity() {
                 override fun onStopTrackingTouch(sb: SeekBar) {
                     mediaPlayer?.let { mp ->
                         mp.position = sb.progress / 1000f
-                        report { it.progress(mp.time, !mp.isPlaying) }
+                        reportProgress(mp.time, !mp.isPlaying, "TimeUpdate")
                     }
                     userSeeking = false
                 }
@@ -234,21 +234,24 @@ class PlayerActivity : AppCompatActivity() {
     private fun onVlcEvent(ev: MediaPlayer.Event) {
         when (ev.type) {
             MediaPlayer.Event.Playing -> {
-                AppLog.i(TAG, "libVLC: Playing (t=${mediaPlayer?.time})")
+                val mp = mediaPlayer
                 if (startMs > 0 && !seekedToStart) {
-                    mediaPlayer?.time = startMs
+                    mp?.time = startMs
                     seekedToStart = true
                 }
+                val pos = mp?.time ?: 0 // captured here, never read off-thread
+                AppLog.i(TAG, "libVLC: Playing (t=$pos)")
                 if (!startReported) {
                     startReported = true
-                    report { it.start(mediaPlayer?.time ?: 0) }
+                    reportStart(pos)
+                } else {
+                    reportProgress(pos, false, "Unpause")
                 }
-                report { it.progress(mediaPlayer?.time ?: 0, false) }
             }
             MediaPlayer.Event.Paused ->
-                report { it.progress(mediaPlayer?.time ?: 0, true) }
+                reportProgress(mediaPlayer?.time ?: 0, true, "Pause")
             MediaPlayer.Event.EndReached -> {
-                report { it.stopped(mediaPlayer?.time ?: 0) }
+                reportStopped(mediaPlayer?.time ?: 0)
                 runOnUiThread { finish() }
             }
             MediaPlayer.Event.EncounteredError -> {
@@ -280,7 +283,7 @@ class PlayerActivity : AppCompatActivity() {
                         playPauseBtn?.text = if (mp.isPlaying) "❚❚" else "▶"
                         sampleBandwidth(mp)
                         if (statsVisible) updateStats(mp)
-                        if (mp.isPlaying && tick % 10 == 9) report { it.progress(mp.time, false) }
+                        if (mp.isPlaying && tick % 10 == 9) reportProgress(mp.time, false, "TimeUpdate")
                     }
                     tick++
                     delay(1000)
@@ -443,18 +446,37 @@ class PlayerActivity : AppCompatActivity() {
                 if (controlsBar?.visibility != View.VISIBLE) { togglePlay(); return true }
             }
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> {
-                mediaPlayer?.let { it.time = (it.time - 10_000).coerceAtLeast(0); showControls() }; return true
+                mediaPlayer?.let {
+                    it.time = (it.time - 10_000).coerceAtLeast(0)
+                    reportProgress(it.time, !it.isPlaying, "TimeUpdate"); showControls()
+                }; return true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
-                mediaPlayer?.let { it.time = it.time + 10_000; showControls() }; return true
+                mediaPlayer?.let {
+                    it.time = it.time + 10_000
+                    reportProgress(it.time, !it.isPlaying, "TimeUpdate"); showControls()
+                }; return true
             }
         }
         return super.onKeyDown(keyCode, event)
     }
 
-    private fun report(block: (EmbyReporter) -> Unit) {
+    // Position is always captured by the caller (player thread) and passed in as
+    // a primitive — never read inside the IO coroutine — so reports always carry
+    // the real/seeked position, not a stale/off-thread value.
+    private fun reportStart(posMs: Long) {
         val r = reporter ?: return
-        lifecycleScope.launch(Dispatchers.IO) { runCatching { block(r) } }
+        lifecycleScope.launch(Dispatchers.IO) { runCatching { r.start(posMs) } }
+    }
+
+    private fun reportProgress(posMs: Long, paused: Boolean, event: String) {
+        val r = reporter ?: return
+        lifecycleScope.launch(Dispatchers.IO) { runCatching { r.progress(posMs, paused, event) } }
+    }
+
+    private fun reportStopped(posMs: Long) {
+        val r = reporter ?: return
+        lifecycleScope.launch(Dispatchers.IO) { runCatching { r.stopped(posMs) } }
     }
 
     override fun onStop() {

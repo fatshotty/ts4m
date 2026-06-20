@@ -65,9 +65,9 @@ class EmbyReporter(
 
     fun start(positionMs: Long) = post("/Sessions/Playing", base(positionMs, false))
 
-    fun progress(positionMs: Long, paused: Boolean) =
+    fun progress(positionMs: Long, paused: Boolean, eventName: String = "TimeUpdate") =
         post("/Sessions/Playing/Progress", base(positionMs, paused).apply {
-            put("EventName", "TimeUpdate")
+            put("EventName", eventName)
         })
 
     fun stopped(positionMs: Long) {
