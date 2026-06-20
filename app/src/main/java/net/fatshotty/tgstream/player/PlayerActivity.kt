@@ -26,6 +26,7 @@ import net.fatshotty.tgstream.util.AppLog
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.interfaces.IMedia
 import org.videolan.libvlc.util.VLCVideoLayout
 
 /**
@@ -78,6 +79,13 @@ class PlayerActivity : AppCompatActivity() {
     // stats
     private var statsView: TextView? = null
     private var statsVisible = false
+    private var lastReadBytes = 0
+    private var lastStatsNs = 0L
+    private var liveBytesPerSec = 0.0
+    private var emaBytesPerSec = 0.0
+    private var totalBytes = 0L
+    @Volatile private var lastStats: IMedia.Stats? = null
+    private var audioInfo: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -111,7 +119,7 @@ class PlayerActivity : AppCompatActivity() {
         val url = Tg.streamUrl(channel, messages, conns)
         AppLog.i(TAG, "stream url: $url (engineReady=${Tg.isReady})")
 
-        val vlc = LibVLC(this, arrayListOf("--network-caching=1500", "--http-reconnect", "--no-stats"))
+        val vlc = LibVLC(this, arrayListOf("--network-caching=1500", "--http-reconnect"))
         val mp = MediaPlayer(vlc)
         libVlc = vlc
         mediaPlayer = mp
@@ -270,6 +278,7 @@ class PlayerActivity : AppCompatActivity() {
                             durationLabel?.text = fmtTime(durationMs)
                         }
                         playPauseBtn?.text = if (mp.isPlaying) "❚❚" else "▶"
+                        sampleBandwidth(mp)
                         if (statsVisible) updateStats(mp)
                         if (mp.isPlaying && tick % 10 == 9) report { it.progress(mp.time, false) }
                     }
@@ -308,6 +317,28 @@ class PlayerActivity : AppCompatActivity() {
         statsView?.visibility = if (statsVisible) View.VISIBLE else View.GONE
     }
 
+    /** Samples libVLC's read counter to compute our own download rate. Runs
+     *  every second regardless of overlay visibility. readBytes is a 32-bit
+     *  counter, so deltas are computed with wrap-around handling. */
+    private fun sampleBandwidth(mp: MediaPlayer) {
+        val media = mp.media ?: return
+        val stats = runCatching { media.stats }.getOrNull()
+        runCatching { media.release() }
+        lastStats = stats ?: return
+        val now = System.nanoTime()
+        if (lastStatsNs == 0L) {
+            lastStatsNs = now; lastReadBytes = stats.readBytes; return
+        }
+        val dt = (now - lastStatsNs).coerceAtLeast(1) / 1_000_000_000.0
+        val rawDelta = stats.readBytes - lastReadBytes // Int, wraps correctly
+        val delta = if (rawDelta >= 0) rawDelta.toLong() else rawDelta.toLong() + 0x1_0000_0000L
+        liveBytesPerSec = delta / dt
+        emaBytesPerSec = if (emaBytesPerSec == 0.0) liveBytesPerSec else emaBytesPerSec * 0.7 + liveBytesPerSec * 0.3
+        totalBytes += delta
+        lastReadBytes = stats.readBytes
+        lastStatsNs = now
+    }
+
     private fun updateStats(mp: MediaPlayer) {
         val sb = StringBuilder()
         sb.append("Nome: ").append(if (title.isBlank()) "—" else title).append('\n')
@@ -317,14 +348,82 @@ class PlayerActivity : AppCompatActivity() {
             else -> "in pausa"
         }
         sb.append("Stato: ").append(state).append('\n')
+
+        // Video track (resolution, codec, bitrate, fps)
         runCatching {
             val vt = mp.currentVideoTrack
-            if (vt != null && vt.width > 0) sb.append("Risoluzione: ${vt.width}x${vt.height}\n")
+            if (vt != null && vt.width > 0) {
+                sb.append("Risoluzione: ${vt.width}x${vt.height}\n")
+                val fps = if (vt.frameRateDen > 0) vt.frameRateNum.toDouble() / vt.frameRateDen else 0.0
+                sb.append("Codec video: ").append(vt.codec ?: "?")
+                if (vt.bitrate > 0) sb.append(" @ ").append(humanRate(vt.bitrate.toDouble()))
+                if (fps > 0) sb.append(String.format(" (%.2f fps)", fps))
+                sb.append('\n')
+            }
         }
-        sb.append("Posizione: ").append(fmtTime(mp.time)).append(" / ").append(fmtTime(durationMs)).append('\n')
+
+        // Audio track (codec, channels, rate, language) — cached once parsed.
+        if (audioInfo == null) audioInfo = readAudioInfo(mp)
+        audioInfo?.let { sb.append("Codec audio: ").append(it).append('\n') }
+
+        // Download bandwidth (our own measurement from readBytes)
+        sb.append("Banda live: ").append(humanBytesRate(liveBytesPerSec)).append('\n')
+        sb.append("Banda media: ").append(humanBytesRate(emaBytesPerSec)).append('\n')
+        sb.append("Scaricato: ").append(humanSize(totalBytes)).append('\n')
+
+        lastStats?.let { st ->
+            // libVLC reports these as a scaled float where value*8 ≈ Mbps.
+            sb.append(String.format("inputBitrate: %.1f Mbps\n", st.inputBitrate * 8))
+            sb.append(String.format("demuxBitrate (contenuto): %.1f Mbps\n", st.demuxBitrate * 8))
+        }
+        sb.append("Buffering: ").append(bufferingPct.toInt()).append("%\n")
         sb.append("Connessioni parallele: ").append(conns).append('\n')
-        sb.append("(banda nel Log: 'download: … MB/s')")
+        sb.append("Posizione: ").append(fmtTime(mp.time)).append(" / ").append(fmtTime(durationMs))
         statsView?.text = sb
+    }
+
+    private fun readAudioInfo(mp: MediaPlayer): String? {
+        val media = mp.media ?: return null
+        var info: String? = null
+        runCatching {
+            for (i in 0 until media.trackCount) {
+                val t = media.getTrack(i)
+                if (t.type == IMedia.Track.Type.Audio) {
+                    val a = t as IMedia.AudioTrack
+                    val parts = StringBuilder(a.codec ?: "?")
+                    if (a.channels > 0) parts.append(" ${a.channels}ch")
+                    if (a.rate > 0) parts.append(" ${a.rate}Hz")
+                    if (!a.language.isNullOrBlank()) parts.append(" [${a.language}]")
+                    info = parts.toString()
+                    break
+                }
+            }
+        }
+        runCatching { media.release() }
+        return info
+    }
+
+    private fun humanSize(bytes: Long): String {
+        if (bytes <= 0) return "0 MB"
+        val gb = bytes / 1_073_741_824.0
+        if (gb >= 1.0) return String.format("%.2f GB", gb)
+        return String.format("%.1f MB", bytes / 1_048_576.0)
+    }
+
+    /** bytes/s → "X.X MB/s (Y Mbps)". */
+    private fun humanBytesRate(bytesPerSec: Double): String {
+        if (bytesPerSec <= 0) return "—"
+        val mbs = bytesPerSec / 1_000_000.0
+        val mbps = bytesPerSec * 8 / 1_000_000.0
+        return if (mbs >= 1.0) String.format("%.2f MB/s (%.0f Mbps)", mbs, mbps)
+        else String.format("%.0f KB/s (%.1f Mbps)", bytesPerSec / 1000.0, mbps)
+    }
+
+    /** bits/s → Mbps/kbps (for declared track bitrate). */
+    private fun humanRate(bitsPerSec: Double): String {
+        if (bitsPerSec <= 0) return "—"
+        val mbps = bitsPerSec / 1_000_000.0
+        return if (mbps >= 1.0) String.format("%.2f Mbps", mbps) else String.format("%.0f kbps", bitsPerSec / 1000.0)
     }
 
     private fun fmtTime(ms: Long): String {
