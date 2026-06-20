@@ -17,13 +17,11 @@ android {
         multiDexEnabled = true
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // Ship only 64-bit ARM: covers all modern phones and the Apple-Silicon
-        // emulator. Drops x86/x86_64 (Intel emulators) and armeabi-v7a (old
-        // 32-bit phones), cutting the native libs (libvlc.so + libgojni.so)
-        // from 4 ABIs to 1 (~200 MB → ~65 MB). Add "armeabi-v7a" if old
-        // 32-bit devices must be supported.
+        // ARM only: arm64-v8a (modern phones + Apple-Silicon emulator) and
+        // armeabi-v7a (32-bit Android TV boxes, e.g. Leelbox L1). Drops
+        // x86/x86_64 (Intel emulators). ~125 MB vs ~265 MB for all 4 ABIs.
         ndk {
-            abiFilters += "arm64-v8a"
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
     }
 
