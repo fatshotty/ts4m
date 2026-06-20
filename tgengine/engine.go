@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
@@ -131,6 +132,12 @@ func (e *Engine) Start() error {
 	client := telegram.NewClient(e.apiID, e.apiHash, telegram.Options{
 		SessionStorage: &session.FileStorage{Path: e.session},
 		Logger:         zapLogger(),
+		// Weak 32-bit TV boxes (e.g. Leelbox L1) take much longer for the
+		// MTProto DH key exchange; the 15s default migration timeout is too
+		// short and login fails with "migrate to dc: context deadline exceeded".
+		MigrationTimeout: 60 * time.Second,
+		DialTimeout:      30 * time.Second,
+		ExchangeTimeout:  30 * time.Second,
 	})
 	e.client = client
 
