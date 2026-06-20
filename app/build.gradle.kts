@@ -16,6 +16,15 @@ android {
 
         multiDexEnabled = true
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Ship only 64-bit ARM: covers all modern phones and the Apple-Silicon
+        // emulator. Drops x86/x86_64 (Intel emulators) and armeabi-v7a (old
+        // 32-bit phones), cutting the native libs (libvlc.so + libgojni.so)
+        // from 4 ABIs to 1 (~200 MB → ~65 MB). Add "armeabi-v7a" if old
+        // 32-bit devices must be supported.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
@@ -72,12 +81,8 @@ dependencies {
     implementation(libs.coroutines.android)
 
     // Player: libVLC plays/seeks virtually every container/codec (incl. large
-    // OpenDML AVI, which ExoPlayer can't seek). Media3 kept as a fallback.
+    // OpenDML AVI, which ExoPlayer can't seek). media3/leanback removed — unused.
     implementation(libs.libvlc.all)
-    implementation(libs.media3.exoplayer)
-    implementation(libs.media3.ui)
-    implementation(libs.media3.ui.leanback)
-    implementation(libs.leanback)
 
     implementation(libs.security.crypto)
     implementation(libs.datastore.preferences)
