@@ -2,6 +2,7 @@ package net.fatshotty.tgstream.player
 
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import android.view.KeyEvent
@@ -126,7 +127,15 @@ class PlayerActivity : AppCompatActivity() {
         mp.attachViews(videoLayout!!, null, false, false)
 
         val media = Media(vlc, Uri.parse(url))
-        media.setHWDecoderEnabled(true, false)
+        // HW decode on real devices; the Android emulator's MediaCodec deadlocks
+        // ("buffer deadlock prevented") freezing the video, so use SW there.
+        val isEmulator = Build.FINGERPRINT.contains("generic") ||
+            Build.FINGERPRINT.contains("emulator") ||
+            Build.MODEL.contains("sdk_gphone") ||
+            Build.HARDWARE.contains("goldfish") || Build.HARDWARE.contains("ranchu") ||
+            Build.PRODUCT.contains("sdk")
+        media.setHWDecoderEnabled(!isEmulator, false)
+        AppLog.i(TAG, "HW decode=${!isEmulator} (emulator=$isEmulator)")
         media.addOption(":network-caching=1500")
         mp.media = media
         media.release()
