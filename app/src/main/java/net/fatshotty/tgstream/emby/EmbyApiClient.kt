@@ -1,7 +1,9 @@
 package net.fatshotty.tgstream.emby
 
+import net.fatshotty.tgstream.util.AppLog
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -46,10 +48,29 @@ class EmbyApiClient(
         }
     }
 
-    /** Returns the current user's id (the token's user). */
+    /**
+     * Resolves the current user's id (the token's user). Emby 4.9 has no
+     * /Users/Me route ("Unrecognized Guid format"), so we match the session the
+     * launching Emby app already has open for our DeviceId — it carries the
+     * right UserId. Falls back to /Users/Me for servers that do expose it.
+     */
     fun userId(): String {
-        val json = JSONObject(get("/Users/Me"))
-        return json.optString("Id")
+        if (deviceId.isNotBlank()) {
+            runCatching {
+                val arr = JSONArray(get("/Sessions"))
+                for (i in 0 until arr.length()) {
+                    val s = arr.getJSONObject(i)
+                    if (s.optString("DeviceId") == deviceId) {
+                        val uid = s.optString("UserId")
+                        if (uid.isNotBlank()) {
+                            AppLog.i("EmbyApiClient", "userId via session: $uid")
+                            return uid
+                        }
+                    }
+                }
+            }.onFailure { AppLog.w("EmbyApiClient", "userId via /Sessions failed", it) }
+        }
+        return runCatching { JSONObject(get("/Users/Me")).optString("Id") }.getOrDefault("")
     }
 
     fun item(userId: String, itemId: String): ItemInfo {
