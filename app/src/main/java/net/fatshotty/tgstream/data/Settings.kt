@@ -1,0 +1,40 @@
+package net.fatshotty.tgstream.data
+
+import android.content.Context
+
+/**
+ * Simple persistent settings. For this test we keep it plain (no encryption) to
+ * avoid Keystore-related crashes on odd devices/boxes; the api credentials are
+ * the user's own and never leave the device.
+ */
+object Settings {
+    private const val PREFS = "tgstream"
+    private const val KEY_API_ID = "api_id"
+    private const val KEY_API_HASH = "api_hash"
+    private const val KEY_CONNS = "connections"
+
+    private fun prefs(ctx: Context) =
+        ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    fun getApiId(ctx: Context): Int = prefs(ctx).getInt(KEY_API_ID, 0)
+    fun getApiHash(ctx: Context): String = prefs(ctx).getString(KEY_API_HASH, "") ?: ""
+    fun getConnections(ctx: Context): Int = prefs(ctx).getInt(KEY_CONNS, 3)
+
+    fun setApiCredentials(ctx: Context, apiId: Int, apiHash: String) {
+        prefs(ctx).edit()
+            .putInt(KEY_API_ID, apiId)
+            .putString(KEY_API_HASH, apiHash.trim())
+            .apply()
+    }
+
+    fun setConnections(ctx: Context, n: Int) {
+        prefs(ctx).edit().putInt(KEY_CONNS, n.coerceIn(1, 16)).apply()
+    }
+
+    fun isConfigured(ctx: Context): Boolean =
+        getApiId(ctx) > 0 && getApiHash(ctx).isNotBlank()
+
+    fun clear(ctx: Context) {
+        prefs(ctx).edit().clear().apply()
+    }
+}

@@ -1,0 +1,40 @@
+# ─── Secrets / runtime (NEVER commit) ───
+# Telegram session files contain account auth.
+*.session
+**/spike-session.json
+**/*-session.json
+*.env
+.env
+
+# ─── Android / Gradle build output ───
+.gradle/
+.kotlin/
+/build/
+app/build/
+spike-*/build/
+captures/
+local.properties
+*.apk
+*.aab
+*.ap_
+*.dex
+*.hprof
+
+# ─── gomobile / Go engine build output ───
+# The AAR is generated from tgengine/*.go — regenerate with tgengine/build-aar.sh
+app/libs/*.aar
+tgengine/*.aar
+*.test
+
+# ─── IDE ───
+.idea/
+*.iml
+.vscode/
+
+# ─── Debug logs (our on-device captures) ───
+logapp*.txt
+/*.log
+
+# ─── macOS ───
+.DS_Store
+**/.DS_Store
