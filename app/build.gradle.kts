@@ -71,6 +71,9 @@ dependencies {
     implementation(libs.lifecycle.viewmodel.ktx)
     implementation(libs.coroutines.android)
 
+    // Player: libVLC plays/seeks virtually every container/codec (incl. large
+    // OpenDML AVI, which ExoPlayer can't seek). Media3 kept as a fallback.
+    implementation(libs.libvlc.all)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
     implementation(libs.media3.ui.leanback)

@@ -1,6 +1,7 @@
 package net.fatshotty.tgstream.player
 
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
 import android.view.KeyEvent
@@ -8,47 +9,31 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import androidx.media3.common.Format
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DataSource
-import androidx.media3.datasource.DataSpec
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.datasource.TransferListener
-import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.SeekParameters
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import androidx.media3.datasource.HttpDataSource
 import net.fatshotty.tgstream.emby.EmbyReporter
 import net.fatshotty.tgstream.tg.Tg
 import net.fatshotty.tgstream.util.AppLog
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicLong
+import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.Media
+import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.util.VLCVideoLayout
 
 /**
- * Internal player. Streams from the localhost Go proxy and reports progress to
- * the source app (Emby). Works with touch and with a TV D-pad remote; the
- * default Media3 controller exposes a scrubbable seek bar plus rewind/forward.
- *
- * A "nerd stats" overlay (toggle: MENU/INFO key or the ⓘ button) shows file
- * name/size, resolution, live bitrate, live download bandwidth and the number
- * of parallel connections.
+ * Internal player backed by libVLC — plays/seeks virtually any container/codec
+ * straight from the localhost Go proxy, including large OpenDML AVI that
+ * ExoPlayer can't seek. Reports progress to the source app (Emby). Works with
+ * touch and a TV D-pad (custom overlay controls + key handling).
  */
-@UnstableApi
 class PlayerActivity : AppCompatActivity() {
 
     companion object {
@@ -68,22 +53,31 @@ class PlayerActivity : AppCompatActivity() {
         const val EXTRA_MEDIA_SOURCE = "media_source"
     }
 
-    private var player: ExoPlayer? = null
-    private var playerView: PlayerView? = null
+    private var libVlc: LibVLC? = null
+    private var mediaPlayer: MediaPlayer? = null
+    private var videoLayout: VLCVideoLayout? = null
     private var reporter: EmbyReporter? = null
+
     private var startMs: Long = 0
+    private var seekedToStart = false
     private var startReported = false
+    private var title: String = ""
+    private var conns: Int = 1
+    @Volatile private var durationMs: Long = 0
+    @Volatile private var bufferingPct: Double = 100.0
+
+    // controls
+    private var controlsBar: View? = null
+    private var seekBar: SeekBar? = null
+    private var positionLabel: TextView? = null
+    private var durationLabel: TextView? = null
+    private var playPauseBtn: Button? = null
+    private var userSeeking = false
+    private val hideControls = Runnable { controlsBar?.visibility = View.GONE }
 
     // stats
     private var statsView: TextView? = null
     private var statsVisible = false
-    private var title: String = ""
-    private var conns: Int = 1
-    private val bytesTransferred = AtomicLong(0)
-    @Volatile private var totalBytes: Long = -1
-    private var lastBytes = 0L
-    private var lastTickNs = 0L
-    private var emaBps = 0.0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -93,6 +87,7 @@ class PlayerActivity : AppCompatActivity() {
         val messages = intent.getStringExtra(EXTRA_MESSAGES) ?: ""
         conns = intent.getIntExtra(EXTRA_CONNS, 3)
         startMs = intent.getLongExtra(EXTRA_START_MS, 0)
+        durationMs = intent.getLongExtra(EXTRA_DURATION_MS, 0)
         title = intent.getStringExtra(EXTRA_TITLE) ?: ""
 
         if (channel == 0L || messages.isBlank() || Tg.proxyPort <= 0) {
@@ -111,19 +106,47 @@ class PlayerActivity : AppCompatActivity() {
             )
         }
 
+        buildUi()
+
+        val url = Tg.streamUrl(channel, messages, conns)
+        AppLog.i(TAG, "stream url: $url (engineReady=${Tg.isReady})")
+
+        val vlc = LibVLC(this, arrayListOf("--network-caching=1500", "--http-reconnect", "--no-stats"))
+        val mp = MediaPlayer(vlc)
+        libVlc = vlc
+        mediaPlayer = mp
+        mp.attachViews(videoLayout!!, null, false, false)
+
+        val media = Media(vlc, Uri.parse(url))
+        media.setHWDecoderEnabled(true, false)
+        media.addOption(":network-caching=1500")
+        mp.media = media
+        media.release()
+
+        mp.setEventListener { ev -> onVlcEvent(ev) }
+        mp.play()
+
+        startUiLoop()
+    }
+
+    private fun buildUi() {
         val root = FrameLayout(this)
-        val view = PlayerView(this).apply {
+
+        val video = VLCVideoLayout(this)
+        video.layoutParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
+        )
+        videoLayout = video
+        root.addView(video)
+
+        // Transparent catcher to toggle controls on tap (above video, below bars).
+        val catcher = View(this).apply {
             layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
             )
-            useController = true
-            controllerShowTimeoutMs = 3500
-            setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
-            keepScreenOn = true
+            setOnClickListener { toggleControls() }
         }
-        playerView = view
-        root.addView(view)
+        root.addView(catcher)
 
         statsView = TextView(this).apply {
             setBackgroundColor(Color.argb(170, 0, 0, 0))
@@ -133,8 +156,7 @@ class PlayerActivity : AppCompatActivity() {
             setPadding(24, 24, 24, 24)
             visibility = View.GONE
             layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
             ).apply { gravity = Gravity.TOP or Gravity.START; setMargins(32, 32, 32, 32) }
         }
         root.addView(statsView)
@@ -144,106 +166,141 @@ class PlayerActivity : AppCompatActivity() {
             isFocusable = true
             alpha = 0.6f
             layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
             ).apply { gravity = Gravity.TOP or Gravity.END; setMargins(0, 24, 24, 0) }
             setOnClickListener { toggleStats() }
         }
         root.addView(infoBtn)
-        setContentView(root)
 
-        val httpFactory = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(20_000)
-            .setReadTimeoutMs(30_000)
-            .setTransferListener(object : TransferListener {
-                override fun onTransferInitializing(s: DataSource, d: DataSpec, n: Boolean) {}
-                override fun onTransferStart(s: DataSource, d: DataSpec, n: Boolean) {}
-                override fun onBytesTransferred(s: DataSource, d: DataSpec, n: Boolean, bytes: Int) {
-                    if (n) bytesTransferred.addAndGet(bytes.toLong())
+        // Bottom control bar: play/pause, position, seekbar, duration.
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(Color.argb(140, 0, 0, 0))
+            setPadding(24, 16, 24, 16)
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { gravity = Gravity.BOTTOM }
+        }
+        playPauseBtn = Button(this).apply {
+            text = "❚❚"
+            isFocusable = true
+            setOnClickListener { togglePlay() }
+        }
+        positionLabel = TextView(this).apply {
+            setTextColor(Color.WHITE); textSize = 13f; setPadding(16, 0, 16, 0); text = "0:00"
+        }
+        seekBar = SeekBar(this).apply {
+            max = 1000
+            isFocusable = true
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
+                    if (fromUser) positionLabel?.text = fmtTime((progress / 1000.0 * durationMs).toLong())
                 }
-                override fun onTransferEnd(s: DataSource, d: DataSpec, n: Boolean) {}
+                override fun onStartTrackingTouch(sb: SeekBar) { userSeeking = true; showControls() }
+                override fun onStopTrackingTouch(sb: SeekBar) {
+                    mediaPlayer?.let { mp ->
+                        mp.position = sb.progress / 1000f
+                        report { it.progress(mp.time, !mp.isPlaying) }
+                    }
+                    userSeeking = false
+                }
             })
+        }
+        durationLabel = TextView(this).apply {
+            setTextColor(Color.WHITE); textSize = 13f; setPadding(16, 0, 0, 0); text = "0:00"
+        }
+        bar.addView(playPauseBtn)
+        bar.addView(positionLabel)
+        bar.addView(seekBar)
+        bar.addView(durationLabel)
+        controlsBar = bar
+        root.addView(bar)
 
-        // Resume playback after a seek with little buffered (default is 5s),
-        // so seeks feel near-instant instead of waiting on a big buffer fill.
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                /* minBufferMs = */ 15_000,
-                /* maxBufferMs = */ 60_000,
-                /* bufferForPlaybackMs = */ 1_000,
-                /* bufferForPlaybackAfterRebufferMs = */ 1_500,
-            )
-            .build()
+        setContentView(root)
+        showControls()
+    }
 
-        val exo = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
-            .setLoadControl(loadControl)
-            .setSeekBackIncrementMs(10_000)
-            .setSeekForwardIncrementMs(10_000)
-            .build()
-        // Snap to the nearest keyframe instead of decoding from the previous
-        // keyframe to the exact frame — far less to download/decode after a seek,
-        // so playback resumes much faster (standard streaming-player behavior).
-        exo.setSeekParameters(SeekParameters.CLOSEST_SYNC)
-        player = exo
-        view.player = exo
-
-        val url = Tg.streamUrl(channel, messages, conns)
-        AppLog.i(TAG, "stream url: $url (engineReady=${Tg.isReady})")
-        exo.setMediaItem(MediaItem.fromUri(url))
-        exo.playWhenReady = true
-        exo.prepare()
-        if (startMs > 0) exo.seekTo(startMs)
-
-        exo.addListener(object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
-                val name = when (state) {
-                    Player.STATE_IDLE -> "IDLE"
-                    Player.STATE_BUFFERING -> "BUFFERING"
-                    Player.STATE_READY -> "READY"
-                    Player.STATE_ENDED -> "ENDED"
-                    else -> state.toString()
+    /** libVLC events fire on a VLC thread; only do thread-safe work or post to UI. */
+    private fun onVlcEvent(ev: MediaPlayer.Event) {
+        when (ev.type) {
+            MediaPlayer.Event.Playing -> {
+                AppLog.i(TAG, "libVLC: Playing (t=${mediaPlayer?.time})")
+                if (startMs > 0 && !seekedToStart) {
+                    mediaPlayer?.time = startMs
+                    seekedToStart = true
                 }
-                AppLog.i(TAG, "playback state: $name")
-                if (state == Player.STATE_READY && !startReported) {
+                if (!startReported) {
                     startReported = true
-                    report { it.start(exo.currentPosition) }
+                    report { it.start(mediaPlayer?.time ?: 0) }
                 }
-                if (state == Player.STATE_ENDED) report { it.stopped(exo.currentPosition) }
+                report { it.progress(mediaPlayer?.time ?: 0, false) }
             }
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                report { it.progress(exo.currentPosition, !isPlaying) }
+            MediaPlayer.Event.Paused ->
+                report { it.progress(mediaPlayer?.time ?: 0, true) }
+            MediaPlayer.Event.EndReached -> {
+                report { it.stopped(mediaPlayer?.time ?: 0) }
+                runOnUiThread { finish() }
             }
-            override fun onPositionDiscontinuity(
-                oldP: Player.PositionInfo, newP: Player.PositionInfo, reason: Int,
-            ) {
-                if (reason == Player.DISCONTINUITY_REASON_SEEK)
-                    report { it.progress(newP.positionMs, !exo.isPlaying) }
-            }
-            override fun onPlayerError(error: PlaybackException) {
-                val cause = error.cause
-                val detail = when (cause) {
-                    is HttpDataSource.InvalidResponseCodeException ->
-                        "HTTP ${cause.responseCode} dal proxy: ${
-                            String(cause.responseBody).take(200)
-                        }"
-                    is HttpDataSource.HttpDataSourceException ->
-                        "proxy I/O: ${cause.javaClass.simpleName}: ${cause.message}"
-                    else -> "${cause?.javaClass?.simpleName ?: error.javaClass.simpleName}: ${cause?.message ?: error.message}"
-                }
-                AppLog.e(TAG, "player error [${error.errorCodeName}] $detail", error)
-                runCatching {
-                    android.widget.Toast.makeText(
-                        this@PlayerActivity, "Errore player: $detail", android.widget.Toast.LENGTH_LONG,
-                    ).show()
+            MediaPlayer.Event.EncounteredError -> {
+                AppLog.e(TAG, "libVLC encountered error")
+                runOnUiThread {
+                    runCatching {
+                        Toast.makeText(this, "Errore di riproduzione", Toast.LENGTH_LONG).show()
+                    }
                 }
             }
-        })
+            MediaPlayer.Event.Buffering -> bufferingPct = ev.buffering.toDouble()
+        }
+    }
 
-        fetchTotalSize(url)
-        startProgressLoop()
-        startStatsLoop()
+    private fun startUiLoop() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                var tick = 0
+                while (true) {
+                    val mp = mediaPlayer
+                    if (mp != null) {
+                        val len = mp.length
+                        if (len > 0) durationMs = len
+                        if (!userSeeking && durationMs > 0) {
+                            seekBar?.progress = (mp.position * 1000).toInt()
+                            positionLabel?.text = fmtTime(mp.time)
+                            durationLabel?.text = fmtTime(durationMs)
+                        }
+                        playPauseBtn?.text = if (mp.isPlaying) "❚❚" else "▶"
+                        if (statsVisible) updateStats(mp)
+                        if (mp.isPlaying && tick % 10 == 9) report { it.progress(mp.time, false) }
+                    }
+                    tick++
+                    delay(1000)
+                }
+            }
+        }
+    }
+
+    private fun togglePlay() {
+        val mp = mediaPlayer ?: return
+        if (mp.isPlaying) mp.pause() else mp.play()
+        showControls()
+    }
+
+    private fun toggleControls() {
+        val bar = controlsBar ?: return
+        if (bar.visibility == View.VISIBLE) {
+            bar.visibility = View.GONE
+            bar.removeCallbacks(hideControls)
+        } else {
+            showControls()
+        }
+    }
+
+    private fun showControls() {
+        val bar = controlsBar ?: return
+        bar.visibility = View.VISIBLE
+        bar.removeCallbacks(hideControls)
+        bar.postDelayed(hideControls, 4000)
     }
 
     private fun toggleStats() {
@@ -251,114 +308,49 @@ class PlayerActivity : AppCompatActivity() {
         statsView?.visibility = if (statsVisible) View.VISIBLE else View.GONE
     }
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_INFO ||
-            keyCode == KeyEvent.KEYCODE_PROG_YELLOW
-        ) {
-            toggleStats()
-            return true
-        }
-        return super.onKeyDown(keyCode, event)
-    }
-
-    private fun fetchTotalSize(url: String) {
-        lifecycleScope.launch(Dispatchers.IO) {
-            runCatching {
-                val client = OkHttpClient.Builder()
-                    .connectTimeout(15, TimeUnit.SECONDS)
-                    .readTimeout(15, TimeUnit.SECONDS)
-                    .build()
-                client.newCall(Request.Builder().url(url).head().build()).execute().use { r ->
-                    val len = r.header("Content-Length")?.toLongOrNull()
-                    val cr = r.header("Content-Range")?.substringAfterLast('/')?.toLongOrNull()
-                    totalBytes = cr ?: len ?: -1
-                }
-            }
-        }
-    }
-
-    private fun startStatsLoop() {
-        lastTickNs = System.nanoTime()
-        lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                while (true) {
-                    updateStats()
-                    delay(1000)
-                }
-            }
-        }
-    }
-
-    private fun updateStats() {
-        val p = player ?: return
-        val now = System.nanoTime()
-        val cur = bytesTransferred.get()
-        val dtSec = ((now - lastTickNs).coerceAtLeast(1)) / 1_000_000_000.0
-        val deltaBits = (cur - lastBytes) * 8.0
-        val liveBps = deltaBits / dtSec
-        emaBps = if (emaBps == 0.0) liveBps else emaBps * 0.7 + liveBps * 0.3
-        lastBytes = cur
-        lastTickNs = now
-
-        if (!statsVisible) return
-
-        val fmt: Format? = p.videoFormat
-        val w = fmt?.width ?: p.videoSize.width
-        val h = fmt?.height ?: p.videoSize.height
-        // Bitrate from ExoPlayer's selected video track; fall back to file average.
-        val declaredBitrate = fmt?.bitrate ?: Format.NO_VALUE
-        val fromExo = declaredBitrate > 0
-        val videoBitrate = when {
-            fromExo -> declaredBitrate.toLong()
-            totalBytes > 0 && p.duration > 0 -> totalBytes * 8 * 1000 / p.duration
-            else -> -1
-        }
-
-        // Buffer state: ExoPlayer reports buffered time; estimate bytes from bitrate.
-        val bufPct = p.bufferedPercentage
-        val bufAheadSec = p.totalBufferedDuration / 1000.0
-        val bufBytes = if (videoBitrate > 0) (bufAheadSec * videoBitrate / 8.0).toLong() else -1
-
+    private fun updateStats(mp: MediaPlayer) {
         val sb = StringBuilder()
         sb.append("Nome: ").append(if (title.isBlank()) "—" else title).append('\n')
-        sb.append("Size: ").append(humanSize(totalBytes)).append('\n')
-        sb.append("Risoluzione: ").append(if (w > 0 && h > 0) "${w}x${h}" else "—").append('\n')
-        sb.append("Bitrate video: ").append(humanRate(videoBitrate.toDouble()))
-            .append(if (fromExo) " (ExoPlayer)" else " (media)").append('\n')
-        sb.append("Banda live: ").append(humanRate(liveBps)).append('\n')
-        sb.append("Banda media: ").append(humanRate(emaBps)).append('\n')
-        sb.append("Buffer: ").append(bufPct).append("%  ")
-            .append(String.format("%.1fs", bufAheadSec))
-        if (bufBytes > 0) sb.append("  ~").append(humanSize(bufBytes))
-        sb.append('\n')
-        sb.append("Connessioni parallele: ").append(conns)
+        val state = when {
+            mp.isPlaying -> "in riproduzione"
+            bufferingPct < 100.0 -> "buffering ${bufferingPct.toInt()}%"
+            else -> "in pausa"
+        }
+        sb.append("Stato: ").append(state).append('\n')
+        runCatching {
+            val vt = mp.currentVideoTrack
+            if (vt != null && vt.width > 0) sb.append("Risoluzione: ${vt.width}x${vt.height}\n")
+        }
+        sb.append("Posizione: ").append(fmtTime(mp.time)).append(" / ").append(fmtTime(durationMs)).append('\n')
+        sb.append("Connessioni parallele: ").append(conns).append('\n')
+        sb.append("(banda nel Log: 'download: … MB/s')")
         statsView?.text = sb
     }
 
-    private fun humanSize(bytes: Long): String {
-        if (bytes <= 0) return "—"
-        val gb = bytes / 1_073_741_824.0
-        if (gb >= 1.0) return String.format("%.2f GB", gb)
-        return String.format("%.1f MB", bytes / 1_048_576.0)
+    private fun fmtTime(ms: Long): String {
+        if (ms <= 0) return "0:00"
+        val s = ms / 1000
+        val h = s / 3600; val m = (s % 3600) / 60; val sec = s % 60
+        return if (h > 0) String.format("%d:%02d:%02d", h, m, sec)
+        else String.format("%d:%02d", m, sec)
     }
 
-    private fun humanRate(bitsPerSec: Double): String {
-        if (bitsPerSec <= 0) return "—"
-        val mbps = bitsPerSec / 1_000_000.0
-        if (mbps >= 1.0) return String.format("%.2f Mbps", mbps)
-        return String.format("%.0f kbps", bitsPerSec / 1000.0)
-    }
-
-    private fun startProgressLoop() {
-        lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                while (true) {
-                    val p = player
-                    if (p != null && p.isPlaying) report { it.progress(p.currentPosition, false) }
-                    delay(10_000)
-                }
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        when (keyCode) {
+            KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_PROG_YELLOW -> {
+                toggleStats(); return true
+            }
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                if (controlsBar?.visibility != View.VISIBLE) { togglePlay(); return true }
+            }
+            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> {
+                mediaPlayer?.let { it.time = (it.time - 10_000).coerceAtLeast(0); showControls() }; return true
+            }
+            KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                mediaPlayer?.let { it.time = it.time + 10_000; showControls() }; return true
             }
         }
+        return super.onKeyDown(keyCode, event)
     }
 
     private fun report(block: (EmbyReporter) -> Unit) {
@@ -368,15 +360,20 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onStop() {
         super.onStop()
-        val pos = player?.currentPosition ?: 0
+        val pos = mediaPlayer?.time ?: 0
         val r = reporter
         if (r != null) Thread { runCatching { r.stopped(pos) } }.start()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        playerView?.player = null
-        player?.release()
-        player = null
+        mediaPlayer?.let {
+            runCatching { it.stop() }
+            runCatching { it.detachViews() }
+            runCatching { it.release() }
+        }
+        mediaPlayer = null
+        runCatching { libVlc?.release() }
+        libVlc = null
     }
 }

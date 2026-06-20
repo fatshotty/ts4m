@@ -9,6 +9,7 @@ constraintlayout = "2.2.0"
 lifecycle = "2.8.7"
 coroutines = "1.9.0"
 media3 = "1.5.1"
+libvlc = "3.6.2"
 leanback = "1.0.0"
 securityCrypto = "1.1.0-alpha06"
 datastore = "1.1.1"
@@ -31,6 +32,7 @@ coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutin
 media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
 media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 media3-ui-leanback = { group = "androidx.media3", name = "media3-ui-leanback", version.ref = "media3" }
+libvlc-all = { group = "org.videolan.android", name = "libvlc-all", version.ref = "libvlc" }
 leanback = { group = "androidx.leanback", name = "leanback", version.ref = "leanback" }
 
 security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
