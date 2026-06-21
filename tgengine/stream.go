@@ -23,7 +23,7 @@ const (
 
 	// buildTag is stamped on every stream request so the log unambiguously
 	// identifies the running engine build. Bump it on every engine change.
-	buildTag = "mux-2"
+	buildTag = "media-1"
 )
 
 // proxyServer is the localhost HTTP server ExoPlayer streams from.
@@ -228,7 +228,7 @@ func (e *Engine) streamRange(ctx context.Context, w interface{ Write([]byte) (in
 			}
 			go func(j chunkJob, rc chan chunkResult) {
 				defer func() { <-sem }()
-				data, err := e.getChunk(streamCtx, channelID, input, j.part, j.offset, j.limit, conns)
+				data, err := e.getChunk(channelID, input, j.part, j.offset, j.limit, conns)
 				if err != nil {
 					rc <- chunkResult{err: err}
 					return
@@ -289,14 +289,15 @@ type chunkResult struct {
 // down and trigger an endless reconnect storm. The pipeline stops *issuing* new
 // chunks when the request ends; the few already in flight finish on their own
 // timeout instead of killing connections.
-func (e *Engine) getChunk(ctx context.Context, channelID int64, input tg.InputChannelClass,
+func (e *Engine) getChunk(channelID int64, input tg.InputChannelClass,
 	part *partInfo, offset int64, limit, conns int) ([]byte, error) {
 
-	// Per-request context: when ExoPlayer abandons a request (seek), its
-	// in-flight getFile calls are canceled so the main connection is freed
-	// immediately for the new seek target. Safe now that we multiplex on the
-	// main connection — cancel sends a "drop", it does NOT close the connection
-	// (unlike the old pool, where cancellation churned connections).
+	// Engine-lived context (NOT the per-request one): cancelling a request on
+	// seek/abandon must not cancel in-flight getFile RPCs and tear down pooled
+	// media connections — that caused the conn-id churn spiral. The pipeline
+	// already stops issuing new chunks when the request ends; the few in-flight
+	// ones finish and are discarded.
+	ctx := e.dlCtx
 
 	media, err := e.mediaClient(ctx, part.doc.DCID, conns)
 	if err != nil {
@@ -446,40 +447,27 @@ func (e *Engine) mediaClient(ctx context.Context, dcID, conns int) (*tg.Client, 
 	if max > maxPoolSize {
 		max = maxPoolSize
 	}
-	// client.DC exports auth to a *different* DC. If dcID is our home DC,
-	// Telegram rejects the export with DC_ID_INVALID — use client.Pool, which
-	// opens N connections to the current (home) DC without exporting auth.
-	inv, err := e.client.DC(ctx, dcID, max)
+	// Download on the DC's MEDIA endpoint with N connections. Telegram throttles
+	// sustained getFile on the regular endpoint (the flood waits we saw); the
+	// media endpoint is not throttled — a single account reaches ~10 MB/s there.
+	// gotd does not export auth in the pool path (export lives only in
+	// transfer.go), so the home-DC media pool reuses the existing home auth key.
+	inv, err := e.client.MediaOnly(ctx, dcID, max)
 	if err != nil {
-		if isHomeDCError(err) {
-			// Home DC: reuse the single main connection and let gotd multiplex
-			// the concurrent getFile requests over it (by msg_id). One stable
-			// connection beats a churning N-connection pool — flaky mobile
-			// networks (changing IP/CGNAT) and Telegram's anti-abuse (which RSTs
-			// accounts opening many connections) destroy large pools, and every
-			// death spawns a replacement in an endless spiral.
-			if e.api == nil {
-				return nil, fmt.Errorf("engine not ready (no api)")
-			}
-			logI("dc=%d is home DC, multiplexing on main connection", dcID)
-			e.mediaAPI[dcID] = e.api
-			return e.api, nil
+		logW("MediaOnly dc %d failed (%v); falling back to regular pool (throttled)", dcID, err)
+		inv, err = e.client.Pool(max)
+		if err != nil {
+			logE("connect dc %d failed: %v", dcID, err)
+			return nil, fmt.Errorf("connect dc %d: %w", dcID, err)
 		}
-		logE("connect dc %d failed: %v", dcID, err)
-		return nil, fmt.Errorf("connect dc %d: %w", dcID, err)
+		logI("media client ready dc=%d conns=%d (REGULAR endpoint — throttled)", dcID, max)
+	} else {
+		logI("media client ready dc=%d conns=%d (media endpoint)", dcID, max)
 	}
 	c := tg.NewClient(inv)
 	e.mediaAPI[dcID] = c
 	e.mediaInv[dcID] = inv
-	logI("media client ready dc=%d conns=%d", dcID, max)
 	return c, nil
-}
-
-func isHomeDCError(err error) bool {
-	if rpc, ok := tgerr.As(err); ok && rpc.Type == "DC_ID_INVALID" {
-		return true
-	}
-	return strings.Contains(err.Error(), "DC_ID_INVALID")
 }
 
 func (e *Engine) closeMedia() {
