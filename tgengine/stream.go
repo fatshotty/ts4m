@@ -23,7 +23,7 @@ const (
 
 	// buildTag is stamped on every stream request so the log unambiguously
 	// identifies the running engine build. Bump it on every engine change.
-	buildTag = "media-1"
+	buildTag = "media-2"
 )
 
 // proxyServer is the localhost HTTP server ExoPlayer streams from.
@@ -199,17 +199,20 @@ func (e *Engine) streamRange(ctx context.Context, w interface{ Write([]byte) (in
 		}
 	}
 
-	// Pipeline: keep up to `conns` getChunk calls in flight at all times and
-	// emit results strictly in order. Unlike a per-batch barrier, the network is
-	// never idle waiting for a whole group — a slow chunk no longer stalls the
-	// others, only its own in-order emission.
+	// Pipeline with read-ahead: keep up to `conns` getChunk calls IN FLIGHT, but
+	// let the producer fetch up to 2*conns chunks AHEAD of the in-order emit
+	// position (read-ahead buffer C = 2*conns, like tgshelf). This way a worker
+	// that finishes immediately grabs the next chunk instead of idling while the
+	// consumer waits on an earlier slow chunk — workers never stall under network
+	// jitter, which is what kept us below tgshelf's throughput.
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	resultChans := make(chan chan chunkResult, conns)
+	readAhead := 2 * conns
+	resultChans := make(chan chan chunkResult, readAhead)
 
-	// Producer: spawn workers bounded by `conns`, enqueueing their result
-	// channels in job order so the consumer can emit sequentially.
+	// Producer: spawn workers bounded by `conns` in flight (sem), enqueueing
+	// result channels in job order up to `readAhead` ahead of emission.
 	go func() {
 		defer close(resultChans)
 		sem := make(chan struct{}, conns)
