@@ -85,6 +85,14 @@
             android:supportsPictureInPicture="false"
             android:theme="@style/Theme.TgStream.Player" />
 
+        <activity
+            android:name=".player.PlayerActivityExo"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
+            android:supportsPictureInPicture="false"
+            android:theme="@style/Theme.TgStream.Player" />
+
     </application>
 
 </manifest>

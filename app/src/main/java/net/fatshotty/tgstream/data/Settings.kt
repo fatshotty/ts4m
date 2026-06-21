@@ -13,6 +13,10 @@ object Settings {
     private const val KEY_API_HASH = "api_hash"
     private const val KEY_CONNS = "connections"
     private const val KEY_LAST_URL = "last_url"
+    private const val KEY_ENGINE = "player_engine"
+
+    const val ENGINE_EXO = "exo"
+    const val ENGINE_VLC = "vlc"
 
     private fun prefs(ctx: Context) =
         ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -35,6 +39,13 @@ object Settings {
     fun getLastUrl(ctx: Context): String = prefs(ctx).getString(KEY_LAST_URL, "") ?: ""
     fun setLastUrl(ctx: Context, url: String) {
         prefs(ctx).edit().putString(KEY_LAST_URL, url).apply()
+    }
+
+    /** Playback engine: ENGINE_EXO (default) or ENGINE_VLC. */
+    fun getPlayerEngine(ctx: Context): String =
+        prefs(ctx).getString(KEY_ENGINE, ENGINE_EXO) ?: ENGINE_EXO
+    fun setPlayerEngine(ctx: Context, engine: String) {
+        prefs(ctx).edit().putString(KEY_ENGINE, engine).apply()
     }
 
     fun isConfigured(ctx: Context): Boolean =

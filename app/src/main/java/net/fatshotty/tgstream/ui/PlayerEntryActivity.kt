@@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.fatshotty.tgstream.data.Settings
 import net.fatshotty.tgstream.player.PlayerActivity
+import net.fatshotty.tgstream.player.PlayerActivityExo
 import net.fatshotty.tgstream.provider.ProviderRegistry
 import net.fatshotty.tgstream.provider.ResolveResult
 import net.fatshotty.tgstream.tg.Tg
@@ -67,7 +68,9 @@ class PlayerEntryActivity : AppCompatActivity() {
 
     private fun launchPlayer(r: ResolveResult) {
         val conns = Settings.getConnections(this)
-        val i = Intent(this, PlayerActivity::class.java).apply {
+        val playerClass = if (Settings.getPlayerEngine(this) == Settings.ENGINE_VLC)
+            PlayerActivity::class.java else PlayerActivityExo::class.java
+        val i = Intent(this, playerClass).apply {
             putExtra(PlayerActivity.EXTRA_CHANNEL, r.stream.channelId)
             putExtra(PlayerActivity.EXTRA_MESSAGES, r.stream.messagesDash)
             putExtra(PlayerActivity.EXTRA_CONNS, conns)

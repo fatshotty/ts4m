@@ -78,8 +78,11 @@ dependencies {
     implementation(libs.lifecycle.viewmodel.ktx)
     implementation(libs.coroutines.android)
 
-    // Player: libVLC plays/seeks virtually every container/codec (incl. large
-    // OpenDML AVI, which ExoPlayer can't seek). media3/leanback removed — unused.
+    // Players (hybrid): ExoPlayer/Media3 is default (great HDR/Dolby Vision via the
+    // platform decoder, lightweight — no bundled codecs); libVLC is the optional
+    // engine for containers ExoPlayer can't handle (e.g. large OpenDML AVI).
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.ui)
     implementation(libs.libvlc.all)
 
     implementation(libs.security.crypto)
