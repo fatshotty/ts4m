@@ -11,6 +11,7 @@ package tgengine
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -138,6 +139,21 @@ func (e *Engine) Start() error {
 		MigrationTimeout: 60 * time.Second,
 		DialTimeout:      30 * time.Second,
 		ExchangeTimeout:  30 * time.Second,
+		// MediaOnly() on the HOME DC tries to export auth to itself, which
+		// Telegram refuses with DC_ID_INVALID. But auth keys are per-DC and shared
+		// across a DC's regular/media endpoints, so the media pool already reuses
+		// the home key — the export is redundant. Swallow that specific error so
+		// MediaOnly returns the (already-authorized) media pool; real transfer
+		// errors for foreign DCs still propagate.
+		OnTransfer: func(ctx context.Context, _ *telegram.Client, fn func(context.Context) error) error {
+			if err := fn(ctx); err != nil {
+				if strings.Contains(err.Error(), "DC_ID_INVALID") {
+					return nil
+				}
+				return err
+			}
+			return nil
+		},
 	})
 	e.client = client
 
