@@ -446,6 +446,19 @@ class PlayerActivity : AppCompatActivity() {
         else String.format("%d:%02d", m, sec)
     }
 
+    // D-pad UP toggles the nerd/info panel — universal on every remote (no INFO
+    // key needed). Intercepted before view dispatch so it works even while the
+    // on-screen controls are focused. UP/DOWN aren't used for anything else.
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN &&
+            (event.keyCode == KeyEvent.KEYCODE_DPAD_UP || event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN)
+        ) {
+            toggleStats()
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         when (keyCode) {
             KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_PROG_YELLOW -> {
