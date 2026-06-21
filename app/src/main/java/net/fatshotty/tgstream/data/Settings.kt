@@ -12,6 +12,7 @@ object Settings {
     private const val KEY_API_ID = "api_id"
     private const val KEY_API_HASH = "api_hash"
     private const val KEY_CONNS = "connections"
+    private const val KEY_LAST_URL = "last_url"
 
     private fun prefs(ctx: Context) =
         ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -29,6 +30,11 @@ object Settings {
 
     fun setConnections(ctx: Context, n: Int) {
         prefs(ctx).edit().putInt(KEY_CONNS, n.coerceIn(1, 16)).apply()
+    }
+
+    fun getLastUrl(ctx: Context): String = prefs(ctx).getString(KEY_LAST_URL, "") ?: ""
+    fun setLastUrl(ctx: Context, url: String) {
+        prefs(ctx).edit().putString(KEY_LAST_URL, url).apply()
     }
 
     fun isConfigured(ctx: Context): Boolean =

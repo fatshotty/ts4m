@@ -58,10 +58,18 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent(this@MainActivity, LogActivity::class.java))
             }
         }
+        val speedBtn = Button(this).apply {
+            text = "Test velocità"
+            isFocusable = true
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, SpeedTestActivity::class.java))
+            }
+        }
         root.addView(title)
         root.addView(status)
         root.addView(settingsBtn)
         root.addView(logBtn)
+        root.addView(speedBtn)
         setContentView(root)
         root.applySystemBarInsets()
         settingsBtn.requestFocus()

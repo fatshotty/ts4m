@@ -33,6 +33,7 @@ class PlayerEntryActivity : AppCompatActivity() {
             fail("Nessun URL ricevuto")
             return
         }
+        Settings.setLastUrl(this, uri.toString()) // for the in-app speed test
         if (!Settings.isConfigured(this)) {
             Toast.makeText(this, "Configura prima Telegram", Toast.LENGTH_LONG).show()
             startActivity(Intent(this, LoginActivity::class.java))

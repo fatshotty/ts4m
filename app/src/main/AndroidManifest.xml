@@ -45,6 +45,10 @@
             android:name=".ui.LogActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".ui.SpeedTestActivity"
+            android:exported="false" />
+
         <!-- External-player entry: other apps (Emby) launch us via ACTION_VIEW. -->
         <activity
             android:name=".ui.PlayerEntryActivity"
