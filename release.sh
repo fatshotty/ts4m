@@ -9,7 +9,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-export JAVA_HOME="${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}"
+# Force the Android Studio JBR (Java 21): AGP needs >=17, the shell may default
+# to an older system JDK (Coursier Java 11).
+export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
 
 REPO="fatshotty/ts4m"
@@ -33,7 +35,7 @@ cp "$OUT/app-arm64-v8a-debug.apk"   "$WORK/tgstream-arm64-v8a.apk"
 cp "$OUT/app-armeabi-v7a-debug.apk" "$WORK/tgstream-armeabi-v7a.apk"
 printf '{ "versionCode": %s, "versionName": "%s", "notes": "%s" }\n' "$VC" "$VN" "$NOTES" > "$WORK/version.json"
 
-echo "Publishing release $TAG to $REPO…"
+echo "Publishing release ${TAG} to ${REPO} ..."
 gh release create "$TAG" \
   "$WORK/tgstream-arm64-v8a.apk" \
   "$WORK/tgstream-armeabi-v7a.apk" \
