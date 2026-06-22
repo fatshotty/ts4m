@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gotd/td/telegram"
@@ -431,24 +432,67 @@ func cdnDecrypt(redirect *tg.UploadFileCDNRedirect, src []byte, offset int64) ([
 	return dst, nil
 }
 
+// warmPool eagerly opens `conns` connections by firing that many `open` calls
+// concurrently and waiting for them. gotd's pool creates a connection per
+// in-flight request (up to its max), so concurrent calls force the pool to open
+// up to `conns` distinct connections, which then sit in its free list ready for
+// the real getFile calls. A single connection needs no warming. `open` errors
+// are the caller's concern; warmPool only cares that the connection was opened.
+func warmPool(ctx context.Context, conns int, open func(context.Context) error) {
+	if conns <= 1 {
+		return
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < conns; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = open(ctx)
+		}()
+	}
+	wg.Wait()
+}
+
+// poolNeedsResize reports whether a cached media pool created with existingMax
+// connections must be recreated to honor a request for `requested` connections.
+// We only grow pools (requested > existingMax): shrinking would needlessly tear
+// down healthy in-use connections, and the larger pool already serves smaller
+// requests fine (the per-stream `conns` still bounds in-flight chunks).
+func poolNeedsResize(existingMax, requested int64) bool {
+	return requested > existingMax
+}
+
 // mediaClient returns (and caches) a tg.Client bound to a pool of up to `conns`
 // connections on the given DC.
 func (e *Engine) mediaClient(ctx context.Context, dcID, conns int) (*tg.Client, error) {
-	e.mediaMu.Lock()
-	defer e.mediaMu.Unlock()
-	if e.mediaAPI == nil {
-		e.mediaAPI = make(map[int]*tg.Client)
-		e.mediaInv = make(map[int]telegram.CloseInvoker)
-	}
-	if c, ok := e.mediaAPI[dcID]; ok {
-		return c, nil
-	}
 	max := int64(conns)
 	if max < 1 {
 		max = 1
 	}
 	if max > maxPoolSize {
 		max = maxPoolSize
+	}
+
+	e.mediaMu.Lock()
+	defer e.mediaMu.Unlock()
+	if e.mediaAPI == nil {
+		e.mediaAPI = make(map[int]*tg.Client)
+		e.mediaInv = make(map[int]telegram.CloseInvoker)
+		e.mediaMax = make(map[int]int64)
+	}
+	if c, ok := e.mediaAPI[dcID]; ok {
+		if !poolNeedsResize(e.mediaMax[dcID], max) {
+			return c, nil
+		}
+		// The connection setting was raised since this DC's pool was first built,
+		// so the cached pool capped concurrency below the new value. Tear it down
+		// and recreate at the larger size. In-flight chunks on the old pool finish
+		// against the closing invoker; new chunks use the resized pool.
+		logI("resizing media pool dc=%d from %d to %d conns", dcID, e.mediaMax[dcID], max)
+		_ = e.mediaInv[dcID].Close()
+		delete(e.mediaAPI, dcID)
+		delete(e.mediaInv, dcID)
+		delete(e.mediaMax, dcID)
 	}
 	// Download on the DC's MEDIA endpoint with N connections. Telegram throttles
 	// sustained getFile on the regular endpoint (the flood waits we saw); the
@@ -470,6 +514,18 @@ func (e *Engine) mediaClient(ctx context.Context, dcID, conns int) (*tg.Client, 
 	c := tg.NewClient(inv)
 	e.mediaAPI[dcID] = c
 	e.mediaInv[dcID] = inv
+	e.mediaMax[dcID] = max
+	// Pre-open the pool to `max` connections. The streaming pipeline already
+	// opens N connections for any range spanning ≥N chunks, but a small initial
+	// range (ExoPlayer probing the file head, or a sub-N-MiB file) would leave us
+	// under-parallelized; warming guarantees all N are ready. Fire-and-forget on
+	// the engine-lived ctx — holding mediaMu through N handshakes would serialize
+	// every concurrent getChunk; warmPool errors are irrelevant (goal is just to
+	// open the connections, which then land in the pool's free list).
+	go warmPool(ctx, int(max), func(ctx context.Context) error {
+		_, err := c.HelpGetConfig(ctx)
+		return err
+	})
 	return c, nil
 }
 
@@ -481,6 +537,7 @@ func (e *Engine) closeMedia() {
 	}
 	e.mediaAPI = nil
 	e.mediaInv = nil
+	e.mediaMax = nil
 }
 
 // --- small helpers ---

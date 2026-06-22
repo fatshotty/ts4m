@@ -81,6 +81,7 @@ type Engine struct {
 	mediaMu  sync.Mutex
 	mediaAPI map[int]*tg.Client
 	mediaInv map[int]telegram.CloseInvoker
+	mediaMax map[int]int64 // pool size each DC client was created with
 }
 
 // NewEngine creates an engine. sessionFile is an absolute path in app storage.
