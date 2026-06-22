@@ -26,14 +26,18 @@ android {
     }
 
     // One APK per ABI (~80-85 MB each) instead of one 162 MB universal, so the
-    // in-app updater downloads only the device's ABI. arm64-v8a (modern phones +
-    // Apple-Silicon emulator) and armeabi-v7a (32-bit TV boxes); no x86. Same
-    // versionCode on both. (Replaces ndk abiFilters — they can't coexist.)
+    // in-app updater downloads only the device's ABI. Default = arm64-v8a (modern
+    // phones + Apple-Silicon emulator) + armeabi-v7a (32-bit TV boxes). Override
+    // for one-off targets, e.g. `-PabiList=x86_64` for an x86_64 redroid container.
+    // (Replaces ndk abiFilters — they can't coexist.)
+    val abiList = (project.findProperty("abiList") as String?)
+        ?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
+        ?: listOf("arm64-v8a", "armeabi-v7a")
     splits {
         abi {
             isEnable = true
             reset()
-            include("arm64-v8a", "armeabi-v7a")
+            include(*abiList.toTypedArray())
             isUniversalApk = false
         }
     }
