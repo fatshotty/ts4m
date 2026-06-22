@@ -34,6 +34,7 @@ import kotlinx.coroutines.launch
 import net.fatshotty.tgstream.emby.EmbyReporter
 import net.fatshotty.tgstream.tg.Tg
 import net.fatshotty.tgstream.util.AppLog
+import net.fatshotty.tgstream.util.BufferTuning
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
@@ -152,9 +153,12 @@ class PlayerActivityExo : AppCompatActivity() {
                 override fun onTransferEnd(s: DataSource, d: DataSpec, n: Boolean) {}
             })
 
-        // Resume playback after a seek with little buffered (default is 5s).
+        // Auto-sized buffer: up to 120s ahead, capped by a device-RAM-aware byte
+        // budget (Java-heap bound). Resume after seek with little buffered.
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15_000, 60_000, 1_000, 1_500)
+            .setBufferDurationsMs(15_000, 120_000, 1_000, 1_500)
+            .setTargetBufferBytes(BufferTuning.exoTargetBufferBytes(this))
+            .setPrioritizeTimeOverSizeThresholds(false)
             .build()
 
         val exo = ExoPlayer.Builder(this)

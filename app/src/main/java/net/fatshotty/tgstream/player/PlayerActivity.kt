@@ -120,7 +120,8 @@ class PlayerActivity : AppCompatActivity() {
         val url = Tg.streamUrl(channel, messages, conns)
         AppLog.i(TAG, "stream url: $url (engineReady=${Tg.isReady})")
 
-        val vlc = LibVLC(this, arrayListOf("--network-caching=1500", "--http-reconnect"))
+        val cachingMs = net.fatshotty.tgstream.util.BufferTuning.libVlcCachingMs(this)
+        val vlc = LibVLC(this, arrayListOf("--network-caching=$cachingMs", "--http-reconnect"))
         val mp = MediaPlayer(vlc)
         libVlc = vlc
         mediaPlayer = mp
@@ -136,7 +137,7 @@ class PlayerActivity : AppCompatActivity() {
             Build.PRODUCT.contains("sdk")
         media.setHWDecoderEnabled(!isEmulator, false)
         AppLog.i(TAG, "HW decode=${!isEmulator} (emulator=$isEmulator)")
-        media.addOption(":network-caching=1500")
+        media.addOption(":network-caching=$cachingMs")
         mp.media = media
         media.release()
 

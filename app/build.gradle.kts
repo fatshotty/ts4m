@@ -3,6 +3,13 @@ plugins {
     alias(libs.plugins.kotlin.android)
 }
 
+// versionCode auto-derived from the git commit count: monotonic, bumps every
+// commit, so the in-app updater can compare against the latest release.
+val commitCount: Int = runCatching {
+    providers.exec { commandLine("git", "rev-list", "--count", "HEAD") }
+        .standardOutput.asText.get().trim().toInt()
+}.getOrDefault(1)
+
 android {
     namespace = "net.fatshotty.tgstream"
     compileSdk = 36
@@ -11,17 +18,23 @@ android {
         applicationId = "net.fatshotty.tgstream"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = commitCount
+        versionName = "0.1.$commitCount"
 
         multiDexEnabled = true
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
 
-        // ARM only: arm64-v8a (modern phones + Apple-Silicon emulator) and
-        // armeabi-v7a (32-bit Android TV boxes, e.g. Leelbox L1). Drops
-        // x86/x86_64 (Intel emulators). ~125 MB vs ~265 MB for all 4 ABIs.
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+    // One APK per ABI (~80-85 MB each) instead of one 162 MB universal, so the
+    // in-app updater downloads only the device's ABI. arm64-v8a (modern phones +
+    // Apple-Silicon emulator) and armeabi-v7a (32-bit TV boxes); no x86. Same
+    // versionCode on both. (Replaces ndk abiFilters — they can't coexist.)
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = false
         }
     }
 
@@ -47,6 +60,7 @@ android {
 
     buildFeatures {
         viewBinding = true
+        buildConfig = true
     }
 
     packaging {

@@ -6,13 +6,18 @@ import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import net.fatshotty.tgstream.BuildConfig
 import net.fatshotty.tgstream.data.Settings
 import net.fatshotty.tgstream.tg.Tg
+import net.fatshotty.tgstream.update.Updater
 
 /**
  * Launcher / idle screen. Once Telegram is configured the app just sits here,
@@ -21,6 +26,7 @@ import net.fatshotty.tgstream.tg.Tg
 class MainActivity : AppCompatActivity() {
 
     private lateinit var status: TextView
+    private lateinit var updateBtn: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,7 +43,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(64, 64, 64, 64)
         }
         val title = TextView(this).apply {
-            text = "tgstream"
+            text = "tgstream  v${BuildConfig.VERSION_NAME}"
             textSize = 28f
         }
         status = TextView(this).apply {
@@ -65,11 +71,17 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent(this@MainActivity, SpeedTestActivity::class.java))
             }
         }
+        updateBtn = Button(this).apply {
+            text = "Aggiorna app"
+            isFocusable = true
+            setOnClickListener { doUpdate() }
+        }
         root.addView(title)
         root.addView(status)
         root.addView(settingsBtn)
         root.addView(logBtn)
         root.addView(speedBtn)
+        root.addView(updateBtn)
         setContentView(root)
         root.applySystemBarInsets()
         settingsBtn.requestFocus()
@@ -79,6 +91,48 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 Tg.state.collect { render(it) }
+            }
+        }
+
+        // Silent update check on launch; surfaces a hint if a newer build exists.
+        lifecycleScope.launch {
+            val rel = withContext(Dispatchers.IO) { Updater.checkForUpdate() }
+            if (rel != null) {
+                updateBtn.text = "Aggiorna a v${rel.versionName} ▸"
+                Toast.makeText(
+                    this@MainActivity, "Aggiornamento disponibile: v${rel.versionName}", Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+    }
+
+    private fun doUpdate() {
+        updateBtn.isEnabled = false
+        updateBtn.text = "Controllo aggiornamenti…"
+        lifecycleScope.launch {
+            val rel = withContext(Dispatchers.IO) { Updater.checkForUpdate() }
+            if (rel == null) {
+                updateBtn.text = "Sei aggiornato (v${BuildConfig.VERSION_NAME})"
+                updateBtn.isEnabled = true
+                return@launch
+            }
+            updateBtn.text = "Scarico v${rel.versionName}… 0%"
+            val apk = withContext(Dispatchers.IO) {
+                Updater.download(this@MainActivity) { p ->
+                    runOnUiThread { updateBtn.text = "Scarico v${rel.versionName}… $p%" }
+                }
+            }
+            if (apk == null) {
+                updateBtn.text = "Download fallito — riprova"
+                updateBtn.isEnabled = true
+                return@launch
+            }
+            val launched = Updater.install(this@MainActivity, apk)
+            if (!launched) {
+                updateBtn.text = "Abilita 'Installa app sconosciute' e riprova"
+                updateBtn.isEnabled = true
+            } else {
+                updateBtn.text = "Installazione avviata…"
             }
         }
     }
