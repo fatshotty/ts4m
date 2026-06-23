@@ -159,7 +159,18 @@ class PlayerActivityExo : AppCompatActivity() {
         // first; on light streams the time cap lets it buffer far ahead. In
         // "dynamic" mode the cap ramps LOW→HIGH→VHIGH over the first 20s of play.
         val bufferMode = Settings.getBufferMode(this)
-        val loadControl = if (bufferMode == Settings.BUFFER_DYNAMIC) {
+        val diskCache = Settings.getDiskCache(this)
+        val loadControl = if (diskCache) {
+            // Disk cache on: the Go proxy holds the look-ahead off-heap (50–250 MB),
+            // so ExoPlayer only needs a small RAM buffer for decode smoothness. This
+            // keeps us off largeHeap and lets high-bitrate streams play on low-RAM
+            // boxes that can't afford a 256–384 MB heap buffer.
+            DefaultLoadControl.Builder()
+                .setBufferDurationsMs(10_000, 60_000, 1_000, 1_500)
+                .setTargetBufferBytes(BufferTuning.exoBytes(BufferTuning.Tier.LOW))
+                .setPrioritizeTimeOverSizeThresholds(false)
+                .build()
+        } else if (bufferMode == Settings.BUFFER_DYNAMIC) {
             DynamicLoadControl(
                 lowBytes = BufferTuning.exoBytes(BufferTuning.Tier.LOW),
                 highBytes = BufferTuning.exoBytes(BufferTuning.Tier.HIGH),
@@ -172,7 +183,7 @@ class PlayerActivityExo : AppCompatActivity() {
                 .setPrioritizeTimeOverSizeThresholds(false)
                 .build()
         }
-        AppLog.i(TAG, "buffer mode: $bufferMode")
+        AppLog.i(TAG, "buffer mode: $bufferMode disk-cache: $diskCache")
 
         val exo = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
@@ -185,7 +196,7 @@ class PlayerActivityExo : AppCompatActivity() {
         player = exo
         view.player = exo
 
-        val url = Tg.streamUrl(channel, messages, conns)
+        val url = Tg.streamUrl(channel, messages, conns, diskCache)
         AppLog.i(TAG, "stream url: $url (engine=exo, ready=${Tg.isReady})")
         exo.setMediaItem(MediaItem.fromUri(url))
         exo.playWhenReady = true
@@ -427,5 +438,6 @@ class PlayerActivityExo : AppCompatActivity() {
         playerView?.player = null
         player?.release()
         player = null
+        Tg.clearStreamCache()
     }
 }

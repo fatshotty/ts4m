@@ -75,6 +75,9 @@ object Tg {
             sessionFile,
         )
         e.setLoginListener(listener)
+        // Enable the optional on-disk stream cache rooted in the app cache dir.
+        // The Go side wipes leftovers on set, so a crash never saturates storage.
+        runCatching { e.setCacheDir(ctx.applicationContext.cacheDir.absolutePath) }
         engine = e
         return true
     }
@@ -112,8 +115,14 @@ object Tg {
     fun submitPassword(v: String) = scope.launch { runCatching { engine?.submitPassword(v) } }
 
     /** Builds the localhost proxy URL for a stream. */
-    fun streamUrl(channelId: Long, messagesDash: String, conns: Int): String =
-        "http://127.0.0.1:$proxyPort/stream?channel=$channelId&messages=$messagesDash&conns=$conns"
+    fun streamUrl(channelId: Long, messagesDash: String, conns: Int, cache: Boolean = false): String =
+        "http://127.0.0.1:$proxyPort/stream?channel=$channelId&messages=$messagesDash&conns=$conns" +
+            if (cache) "&cache=1" else ""
+
+    /** Stops and deletes the active on-disk stream cache (call when playback ends). */
+    fun clearStreamCache() {
+        scope.launch { runCatching { engine?.clearStreamCache() } }
+    }
 
     /** Suspends until the engine is authorized and the proxy is up, or timeout. */
     suspend fun awaitReady(timeoutMs: Long = 60_000): Boolean = withContext(Dispatchers.IO) {

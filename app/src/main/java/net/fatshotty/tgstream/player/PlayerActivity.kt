@@ -117,8 +117,9 @@ class PlayerActivity : AppCompatActivity() {
 
         buildUi()
 
-        val url = Tg.streamUrl(channel, messages, conns)
-        AppLog.i(TAG, "stream url: $url (engineReady=${Tg.isReady})")
+        val diskCache = net.fatshotty.tgstream.data.Settings.getDiskCache(this)
+        val url = Tg.streamUrl(channel, messages, conns, diskCache)
+        AppLog.i(TAG, "stream url: $url (engineReady=${Tg.isReady}, diskCache=$diskCache)")
 
         // libVLC's network cache is fixed at media init and cannot be resized at
         // runtime, so "dynamic" can't ramp here — it falls back to a fixed tier.
@@ -532,5 +533,6 @@ class PlayerActivity : AppCompatActivity() {
         mediaPlayer = null
         runCatching { libVlc?.release() }
         libVlc = null
+        Tg.clearStreamCache()
     }
 }

@@ -16,6 +16,7 @@ object Settings {
     private const val KEY_ENGINE = "player_engine"
     private const val KEY_BUFFER = "buffer_mode"
     private const val KEY_SW_DECODE = "force_sw_decode"
+    private const val KEY_DISK_CACHE = "disk_cache"
 
     const val ENGINE_EXO = "exo"
     const val ENGINE_VLC = "vlc"
@@ -81,6 +82,17 @@ object Settings {
     fun getForceSwDecode(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_SW_DECODE, false)
     fun setForceSwDecode(ctx: Context, on: Boolean) {
         prefs(ctx).edit().putBoolean(KEY_SW_DECODE, on).apply()
+    }
+
+    /**
+     * On-disk write-ahead cache (default off). When on, the Go proxy keeps a
+     * small circular file (50–250 MB, sized by bitrate) filled ahead of playback
+     * to absorb jitter on high-bitrate streams, off the Java heap. Deleted on
+     * stop. Applies to both engines (it lives in the proxy).
+     */
+    fun getDiskCache(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_DISK_CACHE, false)
+    fun setDiskCache(ctx: Context, on: Boolean) {
+        prefs(ctx).edit().putBoolean(KEY_DISK_CACHE, on).apply()
     }
 
     fun isConfigured(ctx: Context): Boolean =

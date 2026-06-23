@@ -150,6 +150,26 @@ func (p *proxyServer) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logI("serving bytes %d-%d (%d bytes) range=%v", start, end, end-start+1, isRange)
+
+	// Optional disk cache: route through the per-stream write-ahead ring so a
+	// continuous downloader keeps the pipe hot and the look-ahead lives off-heap.
+	if q.Get("cache") == "1" {
+		var durationSec float64
+		for i := range parts {
+			durationSec += durationOf(parts[i].doc)
+		}
+		key := fmt.Sprintf("%d|%s|%d", channelID, q.Get("messages"), conns)
+		ring, rerr := e.getRing(key, channelID, input, parts, total, durationSec, conns)
+		if rerr != nil {
+			logW("diskcache: init failed (%v); serving direct", rerr)
+		} else if ring != nil {
+			if err := ring.serve(ctx, w, start, end); err != nil {
+				logW("stream ended (cached): %v", err)
+			}
+			return
+		}
+	}
+
 	if err := e.streamRange(ctx, w, channelID, input, parts, start, end, conns); err != nil {
 		// Client disconnects are normal; just stop.
 		logW("stream ended: %v", err)

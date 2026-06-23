@@ -98,6 +98,26 @@ class SettingsActivity : AppCompatActivity() {
         swBtn.setOnClickListener { forceSw = !forceSw; renderSw() }
         root.addView(swBtn)
 
+        root.addView(TextView(this).apply {
+            text = "Cache su disco (streaming ad alto bitrate)"
+            textSize = 16f
+            setPadding(0, 40, 0, 8)
+        })
+        // Optional disk write-ahead cache in the Go proxy: a small circular file
+        // (50–250 MB, sized by bitrate, deleted on stop) filled ahead of playback
+        // to absorb jitter on heavy ~80 Mb/s streams, off the Java heap.
+        var diskCache = Settings.getDiskCache(this)
+        val cacheBtn = Button(this).apply { isFocusable = true }
+        fun renderCache() {
+            cacheBtn.text = if (diskCache)
+                "Cache su disco: ON — tocca per disattivare"
+            else
+                "Cache su disco: OFF — tocca per attivare"
+        }
+        renderCache()
+        cacheBtn.setOnClickListener { diskCache = !diskCache; renderCache() }
+        root.addView(cacheBtn)
+
         val save = Button(this).apply {
             text = "Salva"
             isFocusable = true
@@ -108,6 +128,7 @@ class SettingsActivity : AppCompatActivity() {
                 Settings.setPlayerEngine(this@SettingsActivity, engine)
                 Settings.setBufferMode(this@SettingsActivity, buffer)
                 Settings.setForceSwDecode(this@SettingsActivity, forceSw)
+                Settings.setDiskCache(this@SettingsActivity, diskCache)
                 Toast.makeText(this@SettingsActivity, "Salvato", Toast.LENGTH_SHORT).show()
                 finish()
             }

@@ -11,6 +11,8 @@ package tgengine
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -82,6 +84,13 @@ type Engine struct {
 	mediaAPI map[int]*tg.Client
 	mediaInv map[int]telegram.CloseInvoker
 	mediaMax map[int]int64 // pool size each DC client was created with
+
+	// optional on-disk write-ahead cache (one active stream at a time),
+	// guarded by cacheMu. Empty cacheDir disables it.
+	cacheMu  sync.Mutex
+	cacheDir string
+	ring     *diskRing
+	ringKey  string
 }
 
 // NewEngine creates an engine. sessionFile is an absolute path in app storage.
@@ -209,6 +218,75 @@ func (e *Engine) SubmitCode(code string) { e.codeCh <- code }
 // SubmitPassword provides the 2FA password.
 func (e *Engine) SubmitPassword(pwd string) { e.pwdCh <- pwd }
 
+// SetCacheDir enables the optional on-disk stream cache, rooted at a dedicated
+// subdir of dir (typically the app cache dir). It wipes any leftover cache files
+// from a previous run/crash so the device is never saturated. An empty dir
+// leaves the cache disabled.
+func (e *Engine) SetCacheDir(dir string) {
+	e.cacheMu.Lock()
+	if dir == "" {
+		e.cacheDir = ""
+		e.cacheMu.Unlock()
+		return
+	}
+	e.cacheDir = filepath.Join(dir, cacheSubdir)
+	root := e.cacheDir
+	e.cacheMu.Unlock()
+	_ = os.RemoveAll(root) // sweep orphans from a previous session
+	logI("diskcache: dir=%s (swept)", root)
+}
+
+// ClearStreamCache stops and deletes the active stream cache, if any. Call this
+// when playback ends (player destroyed) so the file is freed promptly.
+func (e *Engine) ClearStreamCache() { e.clearRing() }
+
+func (e *Engine) clearRing() {
+	e.cacheMu.Lock()
+	r := e.ring
+	e.ring = nil
+	e.ringKey = ""
+	e.cacheMu.Unlock()
+	if r != nil {
+		r.close()
+	}
+}
+
+// getRing returns the active ring for key, creating it (and discarding any ring
+// for a different stream) on demand. Returns nil if caching is disabled.
+func (e *Engine) getRing(key string, channelID int64, input tg.InputChannelClass,
+	parts []partInfo, total int64, durationSec float64, conns int) (*diskRing, error) {
+
+	e.cacheMu.Lock()
+	defer e.cacheMu.Unlock()
+	if e.cacheDir == "" {
+		return nil, nil
+	}
+	if e.ring != nil && e.ringKey == key {
+		return e.ring, nil
+	}
+	if e.ring != nil {
+		old := e.ring
+		e.ring = nil
+		e.ringKey = ""
+		// close() blocks on the producer; do it without holding cacheMu so a
+		// concurrent request can't deadlock behind a slow teardown.
+		e.cacheMu.Unlock()
+		old.close()
+		e.cacheMu.Lock()
+		// Another request may have built a ring meanwhile; honor it.
+		if e.ring != nil && e.ringKey == key {
+			return e.ring, nil
+		}
+	}
+	r, err := newDiskRing(e, e.cacheDir, channelID, input, parts, total, cacheCapFor(total, durationSec), conns)
+	if err != nil {
+		return nil, err
+	}
+	e.ring = r
+	e.ringKey = key
+	return r, nil
+}
+
 // Stop tears down the client run loop and proxy.
 func (e *Engine) Stop() {
 	if e.dlCancel != nil {
@@ -217,6 +295,7 @@ func (e *Engine) Stop() {
 	if e.proxy != nil {
 		e.proxy.stop()
 	}
+	e.clearRing()
 	e.closeMedia()
 	select {
 	case <-e.shutdownCh:
