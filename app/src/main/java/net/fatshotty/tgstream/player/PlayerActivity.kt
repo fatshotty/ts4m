@@ -120,7 +120,12 @@ class PlayerActivity : AppCompatActivity() {
         val url = Tg.streamUrl(channel, messages, conns)
         AppLog.i(TAG, "stream url: $url (engineReady=${Tg.isReady})")
 
-        val cachingMs = net.fatshotty.tgstream.util.BufferTuning.libVlcCachingMs(this)
+        // libVLC's network cache is fixed at media init and cannot be resized at
+        // runtime, so "dynamic" can't ramp here — it falls back to a fixed tier.
+        val bufferMode = net.fatshotty.tgstream.data.Settings.getBufferMode(this)
+        val bufferTier = net.fatshotty.tgstream.util.BufferTuning.tierForMode(bufferMode)
+        val cachingMs = net.fatshotty.tgstream.util.BufferTuning.vlcCachingMs(bufferTier)
+        AppLog.i(TAG, "buffer mode: $bufferMode → tier=$bufferTier caching=${cachingMs}ms")
         val vlc = LibVLC(this, arrayListOf("--network-caching=$cachingMs", "--http-reconnect"))
         val mp = MediaPlayer(vlc)
         libVlc = vlc
@@ -386,10 +391,11 @@ class PlayerActivity : AppCompatActivity() {
 
         lastStats?.let { st ->
             // libVLC reports these as a scaled float where value*8 ≈ Mbps.
-            sb.append(String.format("inputBitrate: %.1f Mbps\n", st.inputBitrate * 8))
-            sb.append(String.format("demuxBitrate (contenuto): %.1f Mbps\n", st.demuxBitrate * 8))
+            sb.append("inputBitrate: ").append(humanRate(st.inputBitrate * 8.0 * 1_000_000.0)).append('\n')
+            sb.append("demuxBitrate (contenuto): ").append(humanRate(st.demuxBitrate * 8.0 * 1_000_000.0)).append('\n')
         }
         sb.append("Buffering: ").append(bufferingPct.toInt()).append("%\n")
+        sb.append("Modalità buffer: ").append(net.fatshotty.tgstream.data.Settings.getBufferMode(this)).append('\n')
         sb.append("Connessioni parallele: ").append(conns).append('\n')
         sb.append("Posizione: ").append(fmtTime(mp.time)).append(" / ").append(fmtTime(durationMs))
         statsView?.text = sb
@@ -432,11 +438,13 @@ class PlayerActivity : AppCompatActivity() {
         else String.format("%.0f KB/s (%.1f Mbps)", bytesPerSec / 1000.0, mbps)
     }
 
-    /** bits/s → Mbps/kbps (for declared track bitrate). */
+    /** bits/s → "X.XX MB/s (Y Mbps)" — MB primary, Mbps for reference. */
     private fun humanRate(bitsPerSec: Double): String {
         if (bitsPerSec <= 0) return "—"
+        val mbs = bitsPerSec / 8.0 / 1_000_000.0
         val mbps = bitsPerSec / 1_000_000.0
-        return if (mbps >= 1.0) String.format("%.2f Mbps", mbps) else String.format("%.0f kbps", bitsPerSec / 1000.0)
+        return if (mbs >= 1.0) String.format("%.2f MB/s (%.0f Mbps)", mbs, mbps)
+        else String.format("%.0f KB/s (%.1f Mbps)", bitsPerSec / 8.0 / 1000.0, mbps)
     }
 
     private fun fmtTime(ms: Long): String {

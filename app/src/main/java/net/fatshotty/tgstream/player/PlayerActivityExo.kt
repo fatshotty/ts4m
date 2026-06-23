@@ -31,6 +31,7 @@ import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import net.fatshotty.tgstream.data.Settings
 import net.fatshotty.tgstream.emby.EmbyReporter
 import net.fatshotty.tgstream.tg.Tg
 import net.fatshotty.tgstream.util.AppLog
@@ -153,15 +154,25 @@ class PlayerActivityExo : AppCompatActivity() {
                 override fun onTransferEnd(s: DataSource, d: DataSpec, n: Boolean) {}
             })
 
-        // Auto-sized buffer: up to 300s ahead, capped by a device-RAM-aware byte
+        // Buffer per the user-selected mode. Up to 300s ahead, capped by a byte
         // budget (Java-heap bound). On high-bitrate streams the byte cap binds
-        // first; on light streams the time cap lets it buffer far ahead.
-        // Resume after seek with little buffered.
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15_000, 300_000, 1_000, 1_500)
-            .setTargetBufferBytes(BufferTuning.exoTargetBufferBytes(this))
-            .setPrioritizeTimeOverSizeThresholds(false)
-            .build()
+        // first; on light streams the time cap lets it buffer far ahead. In
+        // "dynamic" mode the cap ramps LOW→HIGH→VHIGH over the first 20s of play.
+        val bufferMode = Settings.getBufferMode(this)
+        val loadControl = if (bufferMode == Settings.BUFFER_DYNAMIC) {
+            DynamicLoadControl(
+                lowBytes = BufferTuning.exoBytes(BufferTuning.Tier.LOW),
+                highBytes = BufferTuning.exoBytes(BufferTuning.Tier.HIGH),
+                vhighBytes = BufferTuning.exoBytes(BufferTuning.Tier.VHIGH),
+            )
+        } else {
+            DefaultLoadControl.Builder()
+                .setBufferDurationsMs(15_000, 300_000, 1_000, 1_500)
+                .setTargetBufferBytes(BufferTuning.exoBytes(BufferTuning.tierForMode(bufferMode)))
+                .setPrioritizeTimeOverSizeThresholds(false)
+                .build()
+        }
+        AppLog.i(TAG, "buffer mode: $bufferMode")
 
         val exo = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
@@ -309,35 +320,71 @@ class PlayerActivityExo : AppCompatActivity() {
             totalBytes > 0 && p.duration > 0 -> totalBytes * 8 * 1000 / p.duration
             else -> -1
         }
+        val af: Format? = p.audioFormat
         val bufPct = p.bufferedPercentage
         val bufAheadSec = p.totalBufferedDuration / 1000.0
+        val state = when {
+            p.isPlaying -> "in riproduzione"
+            p.playbackState == Player.STATE_BUFFERING -> "buffering"
+            p.playbackState == Player.STATE_ENDED -> "terminato"
+            else -> "in pausa"
+        }
 
         val sb = StringBuilder()
         sb.append("Motore: ExoPlayer\n")
         sb.append("Nome: ").append(if (title.isBlank()) "—" else title).append('\n')
-        sb.append("Size: ").append(humanSize(totalBytes)).append('\n')
+        sb.append("Stato: ").append(state).append('\n')
         sb.append("Risoluzione: ").append(if (w > 0 && h > 0) "${w}x${h}" else "—").append('\n')
+        // Video codec + fps
+        val vcodec = fmt?.sampleMimeType ?: fmt?.codecs
+        if (vcodec != null) {
+            sb.append("Codec video: ").append(vcodec)
+            val fps = fmt?.frameRate ?: Format.NO_VALUE.toFloat()
+            if (fps > 0f) sb.append(String.format(" (%.2f fps)", fps))
+            sb.append('\n')
+        }
+        // Audio codec (channels, rate, language)
+        af?.let {
+            val parts = StringBuilder(it.sampleMimeType ?: it.codecs ?: "?")
+            if (it.channelCount > 0) parts.append(" ${it.channelCount}ch")
+            if (it.sampleRate > 0) parts.append(" ${it.sampleRate}Hz")
+            if (!it.language.isNullOrBlank()) parts.append(" [${it.language}]")
+            sb.append("Codec audio: ").append(parts).append('\n')
+        }
         sb.append("Bitrate video: ").append(humanRate(videoBitrate.toDouble()))
             .append(if (fromExo) " (decoder)" else " (media)").append('\n')
         sb.append("Banda live: ").append(humanRate(liveBps)).append('\n')
         sb.append("Banda media: ").append(humanRate(emaBps)).append('\n')
+        sb.append("Scaricato: ").append(humanSize(totalBytes)).append('\n')
         sb.append("Buffer: ").append(bufPct).append("%  ").append(String.format("%.1fs", bufAheadSec)).append('\n')
-        sb.append("Connessioni parallele: ").append(conns)
+        sb.append("Modalità buffer: ").append(Settings.getBufferMode(this)).append('\n')
+        sb.append("Connessioni parallele: ").append(conns).append('\n')
+        sb.append("Posizione: ").append(fmtTime(p.currentPosition)).append(" / ").append(fmtTime(p.duration))
         statsView?.text = sb
     }
 
     private fun humanSize(bytes: Long): String {
-        if (bytes <= 0) return "—"
+        if (bytes <= 0) return "0 MB"
         val gb = bytes / 1_073_741_824.0
         if (gb >= 1.0) return String.format("%.2f GB", gb)
         return String.format("%.1f MB", bytes / 1_048_576.0)
     }
 
+    /** bits/s → "X.XX MB/s (Y Mbps)" — MB primary, Mbps for reference. */
     private fun humanRate(bitsPerSec: Double): String {
         if (bitsPerSec <= 0) return "—"
+        val mbs = bitsPerSec / 8.0 / 1_000_000.0
         val mbps = bitsPerSec / 1_000_000.0
-        if (mbps >= 1.0) return String.format("%.2f Mbps", mbps)
-        return String.format("%.0f kbps", bitsPerSec / 1000.0)
+        return if (mbs >= 1.0) String.format("%.2f MB/s (%.0f Mbps)", mbs, mbps)
+        else String.format("%.0f KB/s (%.1f Mbps)", bitsPerSec / 8.0 / 1000.0, mbps)
+    }
+
+    private fun fmtTime(ms: Long): String {
+        if (ms <= 0) return "0:00"
+        val s = ms / 1000
+        val h = s / 3600; val m = (s % 3600) / 60; val sec = s % 60
+        return if (h > 0) String.format("%d:%02d:%02d", h, m, sec)
+        else String.format("%d:%02d", m, sec)
     }
 
     private fun startProgressLoop() {

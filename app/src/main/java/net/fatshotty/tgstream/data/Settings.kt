@@ -14,9 +14,18 @@ object Settings {
     private const val KEY_CONNS = "connections"
     private const val KEY_LAST_URL = "last_url"
     private const val KEY_ENGINE = "player_engine"
+    private const val KEY_BUFFER = "buffer_mode"
 
     const val ENGINE_EXO = "exo"
     const val ENGINE_VLC = "vlc"
+
+    // Buffer size tiers + "dynamic" (ramps up during playback on ExoPlayer).
+    const val BUFFER_LOW = "low"
+    const val BUFFER_MID = "mid"
+    const val BUFFER_HIGH = "high"
+    const val BUFFER_VHIGH = "vhigh"
+    const val BUFFER_DYNAMIC = "dynamic"
+    val BUFFER_MODES = listOf(BUFFER_LOW, BUFFER_MID, BUFFER_HIGH, BUFFER_VHIGH, BUFFER_DYNAMIC)
 
     private fun prefs(ctx: Context) =
         ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -46,6 +55,15 @@ object Settings {
         prefs(ctx).getString(KEY_ENGINE, ENGINE_EXO) ?: ENGINE_EXO
     fun setPlayerEngine(ctx: Context, engine: String) {
         prefs(ctx).edit().putString(KEY_ENGINE, engine).apply()
+    }
+
+    /** Buffer mode: one of BUFFER_* (default BUFFER_MID). Applies to both engines. */
+    fun getBufferMode(ctx: Context): String {
+        val v = prefs(ctx).getString(KEY_BUFFER, BUFFER_MID) ?: BUFFER_MID
+        return if (v in BUFFER_MODES) v else BUFFER_MID
+    }
+    fun setBufferMode(ctx: Context, mode: String) {
+        prefs(ctx).edit().putString(KEY_BUFFER, mode).apply()
     }
 
     fun isConfigured(ctx: Context): Boolean =

@@ -2,48 +2,65 @@ package net.fatshotty.tgstream.util
 
 import android.app.ActivityManager
 import android.content.Context
+import net.fatshotty.tgstream.data.Settings
 
 /**
- * Auto-sizes the playback buffer by device RAM. The effective buffer adapts to
- * the video automatically: for a given byte cap, seconds buffered = cap / bitrate
- * (a light file buffers many seconds, a heavy 4K file fewer). ExoPlayer's buffer
- * lives on the Java heap so it must stay bounded (hence the byte cap); libVLC's
- * is native memory so we size it by time (= startup latency, kept modest).
+ * Playback buffer sizing. The user picks a tier in Settings (LOW/MID/HIGH/VHIGH)
+ * or "dynamic" (ramps up during playback — ExoPlayer only, see [PlayerActivityExo]
+ * / DynamicLoadControl). For a given byte/time budget the effective seconds buffered
+ * = budget / bitrate (a light file buffers many seconds, a heavy 80 Mb/s file fewer).
+ *
+ * ExoPlayer's buffer lives on the Java heap so it is capped in BYTES (bounded to
+ * avoid OOM even with largeHeap); libVLC's is native memory so it is sized by TIME
+ * (= startup latency).
  */
 object BufferTuning {
 
-    private enum class Tier { LOW, MID, HIGH, VHIGH }
+    enum class Tier { LOW, MID, HIGH, VHIGH }
 
-    /**
-     * ExoPlayer target buffer in BYTES (Java heap — bounded to avoid OOM).
-     * Pushed to the practical heap ceiling per tier (largeHeap=true in the
-     * manifest). At 80 Mb/s (=10 MB/s) these give: LOW ~4.8s, MID ~12.8s,
-     * HIGH ~25.6s, VHIGH ~38.4s of look-ahead.
-     */
-    fun exoTargetBufferBytes(ctx: Context): Int {
-        val mb = when (ramTier(ctx)) {
-            Tier.LOW -> 48    // Fire Stick 1st gen etc.
+    /** ExoPlayer target buffer in BYTES for a tier (Java heap — bounded). */
+    fun exoBytes(tier: Tier): Int {
+        val mb = when (tier) {
+            Tier.LOW -> 48     // Fire Stick 1st gen etc.
             Tier.MID -> 128
             Tier.HIGH -> 256
-            Tier.VHIGH -> 384 // aggressive heap ceiling — needs largeHeap + ~512MB heap
+            Tier.VHIGH -> 384  // aggressive heap ceiling — needs largeHeap + ~512MB heap
         }
         return mb * 1024 * 1024
     }
 
     /**
-     * libVLC network-caching in ms (also the startup latency). Native memory,
-     * so we can afford a big buffer; the cost is latency before first frame.
-     * At 80 Mb/s these cost: LOW ~38MB, MID ~75MB, HIGH ~125MB, VHIGH ~188MB
-     * of native RAM.
+     * libVLC network-caching in ms for a tier. This single value is ALSO the
+     * startup latency AND the post-seek refill wait — libVLC resumes playback only
+     * once the buffer hits 100% of this. So we keep it seek-friendly: even VHIGH
+     * targets ~a few seconds of refill on a bandwidth-limited link, trading some
+     * steady-state buffer for fast seek (HW decode carries most of the fluidity).
      */
-    fun libVlcCachingMs(ctx: Context): Int = when (ramTier(ctx)) {
-        Tier.LOW -> 3000
-        Tier.MID -> 6000
-        Tier.HIGH -> 10000
-        Tier.VHIGH -> 15000
+    fun vlcCachingMs(tier: Tier): Int = when (tier) {
+        Tier.LOW -> 2000
+        Tier.MID -> 4000
+        Tier.HIGH -> 6000
+        Tier.VHIGH -> 10000
     }
 
-    private fun ramTier(ctx: Context): Tier {
+    /**
+     * Resolves the user-selected buffer mode to a concrete tier. "dynamic" has no
+     * single tier: ExoPlayer ramps it live, while libVLC (cache fixed at init,
+     * cannot resize at runtime) falls back to [dynamicFallbackTier].
+     */
+    fun tierForMode(mode: String): Tier = when (mode) {
+        Settings.BUFFER_LOW -> Tier.LOW
+        Settings.BUFFER_HIGH -> Tier.HIGH
+        Settings.BUFFER_VHIGH -> Tier.VHIGH
+        Settings.BUFFER_DYNAMIC -> dynamicFallbackTier
+        else -> Tier.MID
+    }
+
+    /** What "dynamic" means on engines that can't ramp the buffer live (libVLC). */
+    val dynamicFallbackTier = Tier.MID
+
+    /** Auto-detect a tier from device RAM (kept for reference/fallback). */
+    fun autoTier(ctx: Context): Tier {
         val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         if (am.isLowRamDevice) return Tier.LOW
         val mi = ActivityManager.MemoryInfo()

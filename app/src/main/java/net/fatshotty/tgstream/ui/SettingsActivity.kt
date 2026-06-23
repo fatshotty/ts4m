@@ -53,6 +53,32 @@ class SettingsActivity : AppCompatActivity() {
         }
         root.addView(engineBtn)
 
+        root.addView(TextView(this).apply {
+            text = "Buffer"
+            textSize = 16f
+            setPadding(0, 40, 0, 8)
+        })
+        // Cycles LOW → MID → HIGH → VHIGH → DYNAMIC. Applies to BOTH engines.
+        // DYNAMIC ramps the buffer up during playback (ExoPlayer only; on VLC it
+        // falls back to a fixed tier — the cache can't be resized at runtime).
+        var buffer = Settings.getBufferMode(this)
+        val bufferBtn = Button(this).apply { isFocusable = true }
+        fun bufferLabel(m: String) = when (m) {
+            Settings.BUFFER_LOW -> "LOW (~2s, seek rapido)"
+            Settings.BUFFER_HIGH -> "HIGH (buffer ampio)"
+            Settings.BUFFER_VHIGH -> "VHIGH (massimo)"
+            Settings.BUFFER_DYNAMIC -> "DYNAMIC (cresce durante il play)"
+            else -> "MID (predefinito)"
+        }
+        fun renderBuffer() { bufferBtn.text = "Buffer: ${bufferLabel(buffer)} — tocca per cambiare" }
+        renderBuffer()
+        bufferBtn.setOnClickListener {
+            val modes = Settings.BUFFER_MODES
+            buffer = modes[(modes.indexOf(buffer) + 1) % modes.size]
+            renderBuffer()
+        }
+        root.addView(bufferBtn)
+
         val save = Button(this).apply {
             text = "Salva"
             isFocusable = true
@@ -61,6 +87,7 @@ class SettingsActivity : AppCompatActivity() {
                 val n = connField.text.toString().trim().toIntOrNull() ?: 3
                 Settings.setConnections(this@SettingsActivity, n)
                 Settings.setPlayerEngine(this@SettingsActivity, engine)
+                Settings.setBufferMode(this@SettingsActivity, buffer)
                 Toast.makeText(this@SettingsActivity, "Salvato", Toast.LENGTH_SHORT).show()
                 finish()
             }
