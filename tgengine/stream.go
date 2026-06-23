@@ -200,16 +200,27 @@ func (e *Engine) streamRange(ctx context.Context, w interface{ Write([]byte) (in
 		}
 	}
 
-	// Pipeline with read-ahead: keep up to `conns` getChunk calls IN FLIGHT, but
-	// let the producer fetch up to 2*conns chunks AHEAD of the in-order emit
-	// position (read-ahead buffer C = 2*conns, like tgshelf). This way a worker
-	// that finishes immediately grabs the next chunk instead of idling while the
-	// consumer waits on an earlier slow chunk — workers never stall under network
-	// jitter, which is what kept us below tgshelf's throughput.
+	// Pipeline with read-ahead: keep up to `conns` getChunk calls IN FLIGHT (sem),
+	// but let the producer fetch a large WARM PREFETCH window ahead of the in-order
+	// emit position. This is what absorbs bursty clients: ExoPlayer fills its
+	// (heap-bounded) buffer, stops reading → TCP backpressure blocks our w.Write,
+	// then drains and resumes. With only a tiny window the producer idles during
+	// the pause and the Telegram fetch pipeline cold-restarts on resume (~2-3s gap
+	// → stall). A big window (~64 MiB ≈ a few seconds of high-bitrate video) keeps
+	// chunks ready and workers warm, so resume is instant and throughput uses the
+	// full link instead of collapsing to ~bitrate. Concurrency stays bounded by
+	// `conns`; only the buffered-ahead depth grows (native RAM, cheap).
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	readAhead := 2 * conns
+	// chunkSize is 1 MiB, so readAhead is also the warm-prefetch size in MiB.
+	readAhead := 8 * conns
+	if readAhead < 64 {
+		readAhead = 64 // floor: cover the resume ramp even at low conns
+	}
+	if readAhead > 128 {
+		readAhead = 128 // ceiling: bound native RAM per stream
+	}
 	resultChans := make(chan chan chunkResult, readAhead)
 
 	// Producer: spawn workers bounded by `conns` in flight (sem), enqueueing

@@ -135,13 +135,17 @@ class PlayerActivity : AppCompatActivity() {
         val media = Media(vlc, Uri.parse(url))
         // HW decode on real devices; the Android emulator's MediaCodec deadlocks
         // ("buffer deadlock prevented") freezing the video, so use SW there.
+        // The user can also force SW decode (Settings) to test Dolby Vision / HDR
+        // 10-bit, where the HW decoder may show a green screen.
         val isEmulator = Build.FINGERPRINT.contains("generic") ||
             Build.FINGERPRINT.contains("emulator") ||
             Build.MODEL.contains("sdk_gphone") ||
             Build.HARDWARE.contains("goldfish") || Build.HARDWARE.contains("ranchu") ||
             Build.PRODUCT.contains("sdk")
-        media.setHWDecoderEnabled(!isEmulator, false)
-        AppLog.i(TAG, "HW decode=${!isEmulator} (emulator=$isEmulator)")
+        val forceSw = net.fatshotty.tgstream.data.Settings.getForceSwDecode(this)
+        val useHw = !isEmulator && !forceSw
+        media.setHWDecoderEnabled(useHw, false)
+        AppLog.i(TAG, "HW decode=$useHw (emulator=$isEmulator, forceSw=$forceSw)")
         media.addOption(":network-caching=$cachingMs")
         mp.media = media
         media.release()
@@ -396,6 +400,7 @@ class PlayerActivity : AppCompatActivity() {
         }
         sb.append("Buffering: ").append(bufferingPct.toInt()).append("%\n")
         sb.append("Modalità buffer: ").append(net.fatshotty.tgstream.data.Settings.getBufferMode(this)).append('\n')
+        sb.append("Decodifica: ").append(if (net.fatshotty.tgstream.data.Settings.getForceSwDecode(this)) "SW (forzata)" else "HW").append('\n')
         sb.append("Connessioni parallele: ").append(conns).append('\n')
         sb.append("Posizione: ").append(fmtTime(mp.time)).append(" / ").append(fmtTime(durationMs))
         statsView?.text = sb

@@ -30,17 +30,16 @@ object BufferTuning {
     }
 
     /**
-     * libVLC network-caching in ms for a tier. This single value is ALSO the
-     * startup latency AND the post-seek refill wait — libVLC resumes playback only
-     * once the buffer hits 100% of this. So we keep it seek-friendly: even VHIGH
-     * targets ~a few seconds of refill on a bandwidth-limited link, trading some
-     * steady-state buffer for fast seek (HW decode carries most of the fluidity).
+     * libVLC network-caching in ms for a tier (native memory; also startup latency
+     * and post-seek refill wait — libVLC resumes only once the buffer hits 100% of
+     * this). These are the v0.1.20 values: a larger cache gives noticeably smoother
+     * playback on high-bitrate streams (the trade-off is a slower seek refill).
      */
     fun vlcCachingMs(tier: Tier): Int = when (tier) {
-        Tier.LOW -> 2000
-        Tier.MID -> 4000
-        Tier.HIGH -> 6000
-        Tier.VHIGH -> 10000
+        Tier.LOW -> 3000
+        Tier.MID -> 6000
+        Tier.HIGH -> 10000
+        Tier.VHIGH -> 15000
     }
 
     /**

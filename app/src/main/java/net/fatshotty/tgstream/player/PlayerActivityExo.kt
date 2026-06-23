@@ -370,13 +370,12 @@ class PlayerActivityExo : AppCompatActivity() {
         return String.format("%.1f MB", bytes / 1_048_576.0)
     }
 
-    /** bits/s → "X.XX MB/s (Y Mbps)" — MB primary, Mbps for reference. */
+    /** bits/s → "X.XX MB/s" (megabytes per second). */
     private fun humanRate(bitsPerSec: Double): String {
         if (bitsPerSec <= 0) return "—"
         val mbs = bitsPerSec / 8.0 / 1_000_000.0
-        val mbps = bitsPerSec / 1_000_000.0
-        return if (mbs >= 1.0) String.format("%.2f MB/s (%.0f Mbps)", mbs, mbps)
-        else String.format("%.0f KB/s (%.1f Mbps)", bitsPerSec / 8.0 / 1000.0, mbps)
+        return if (mbs >= 1.0) String.format("%.2f MB/s", mbs)
+        else String.format("%.0f KB/s", bitsPerSec / 8.0 / 1000.0)
     }
 
     private fun fmtTime(ms: Long): String {

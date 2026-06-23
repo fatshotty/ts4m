@@ -64,11 +64,11 @@ class SettingsActivity : AppCompatActivity() {
         var buffer = Settings.getBufferMode(this)
         val bufferBtn = Button(this).apply { isFocusable = true }
         fun bufferLabel(m: String) = when (m) {
-            Settings.BUFFER_LOW -> "LOW (~2s, seek rapido)"
-            Settings.BUFFER_HIGH -> "HIGH (buffer ampio)"
+            Settings.BUFFER_LOW -> "LOW (~3s, seek rapido)"
+            Settings.BUFFER_HIGH -> "HIGH (predefinito, buffer ampio)"
             Settings.BUFFER_VHIGH -> "VHIGH (massimo)"
             Settings.BUFFER_DYNAMIC -> "DYNAMIC (cresce durante il play)"
-            else -> "MID (predefinito)"
+            else -> "MID"
         }
         fun renderBuffer() { bufferBtn.text = "Buffer: ${bufferLabel(buffer)} — tocca per cambiare" }
         renderBuffer()
@@ -79,6 +79,25 @@ class SettingsActivity : AppCompatActivity() {
         }
         root.addView(bufferBtn)
 
+        root.addView(TextView(this).apply {
+            text = "Decodifica video (solo VLC)"
+            textSize = 16f
+            setPadding(0, 40, 0, 8)
+        })
+        // Forces software decoding on libVLC. Use to test Dolby Vision / HDR 10-bit
+        // content where the HW decoder shows a green screen. Heavier on CPU.
+        var forceSw = Settings.getForceSwDecode(this)
+        val swBtn = Button(this).apply { isFocusable = true }
+        fun renderSw() {
+            swBtn.text = if (forceSw)
+                "Decodifica SW Dolby Vision: ON — tocca per HW"
+            else
+                "Decodifica SW Dolby Vision: OFF (HW) — tocca per SW"
+        }
+        renderSw()
+        swBtn.setOnClickListener { forceSw = !forceSw; renderSw() }
+        root.addView(swBtn)
+
         val save = Button(this).apply {
             text = "Salva"
             isFocusable = true
@@ -88,6 +107,7 @@ class SettingsActivity : AppCompatActivity() {
                 Settings.setConnections(this@SettingsActivity, n)
                 Settings.setPlayerEngine(this@SettingsActivity, engine)
                 Settings.setBufferMode(this@SettingsActivity, buffer)
+                Settings.setForceSwDecode(this@SettingsActivity, forceSw)
                 Toast.makeText(this@SettingsActivity, "Salvato", Toast.LENGTH_SHORT).show()
                 finish()
             }

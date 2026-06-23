@@ -15,6 +15,7 @@ object Settings {
     private const val KEY_LAST_URL = "last_url"
     private const val KEY_ENGINE = "player_engine"
     private const val KEY_BUFFER = "buffer_mode"
+    private const val KEY_SW_DECODE = "force_sw_decode"
 
     const val ENGINE_EXO = "exo"
     const val ENGINE_VLC = "vlc"
@@ -57,13 +58,29 @@ object Settings {
         prefs(ctx).edit().putString(KEY_ENGINE, engine).apply()
     }
 
-    /** Buffer mode: one of BUFFER_* (default BUFFER_MID). Applies to both engines. */
+    /**
+     * Buffer mode: one of BUFFER_* (default BUFFER_HIGH). Applies to both engines.
+     * HIGH matches v0.1.20's effective behaviour on typical TV boxes (256 MB on
+     * ExoPlayer, 10s libVLC cache) — noticeably smoother than MID on high-bitrate
+     * streams.
+     */
     fun getBufferMode(ctx: Context): String {
-        val v = prefs(ctx).getString(KEY_BUFFER, BUFFER_MID) ?: BUFFER_MID
-        return if (v in BUFFER_MODES) v else BUFFER_MID
+        val v = prefs(ctx).getString(KEY_BUFFER, BUFFER_HIGH) ?: BUFFER_HIGH
+        return if (v in BUFFER_MODES) v else BUFFER_HIGH
     }
     fun setBufferMode(ctx: Context, mode: String) {
         prefs(ctx).edit().putString(KEY_BUFFER, mode).apply()
+    }
+
+    /**
+     * Force software video decoding on libVLC (default false = hardware). Useful to
+     * test Dolby Vision / HDR 10-bit content, where the HW decoder can produce a
+     * green screen; SW decode renders correct colours but is much heavier on CPU.
+     * No effect on ExoPlayer (always uses the platform decoder).
+     */
+    fun getForceSwDecode(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_SW_DECODE, false)
+    fun setForceSwDecode(ctx: Context, on: Boolean) {
+        prefs(ctx).edit().putBoolean(KEY_SW_DECODE, on).apply()
     }
 
     fun isConfigured(ctx: Context): Boolean =
