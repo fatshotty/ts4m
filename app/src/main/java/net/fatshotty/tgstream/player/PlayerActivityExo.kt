@@ -153,10 +153,12 @@ class PlayerActivityExo : AppCompatActivity() {
                 override fun onTransferEnd(s: DataSource, d: DataSpec, n: Boolean) {}
             })
 
-        // Auto-sized buffer: up to 120s ahead, capped by a device-RAM-aware byte
-        // budget (Java-heap bound). Resume after seek with little buffered.
+        // Auto-sized buffer: up to 300s ahead, capped by a device-RAM-aware byte
+        // budget (Java-heap bound). On high-bitrate streams the byte cap binds
+        // first; on light streams the time cap lets it buffer far ahead.
+        // Resume after seek with little buffered.
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15_000, 120_000, 1_000, 1_500)
+            .setBufferDurationsMs(15_000, 300_000, 1_000, 1_500)
             .setTargetBufferBytes(BufferTuning.exoTargetBufferBytes(this))
             .setPrioritizeTimeOverSizeThresholds(false)
             .build()

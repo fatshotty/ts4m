@@ -14,21 +14,33 @@ object BufferTuning {
 
     private enum class Tier { LOW, MID, HIGH, VHIGH }
 
-    /** ExoPlayer target buffer in BYTES (Java heap — bounded to avoid OOM). */
+    /**
+     * ExoPlayer target buffer in BYTES (Java heap — bounded to avoid OOM).
+     * Pushed to the practical heap ceiling per tier (largeHeap=true in the
+     * manifest). At 80 Mb/s (=10 MB/s) these give: LOW ~4.8s, MID ~12.8s,
+     * HIGH ~25.6s, VHIGH ~38.4s of look-ahead.
+     */
     fun exoTargetBufferBytes(ctx: Context): Int {
         val mb = when (ramTier(ctx)) {
-            Tier.LOW -> 32    // Fire Stick 1st gen etc.
-            Tier.MID -> 96
-            Tier.HIGH -> 192
-            Tier.VHIGH -> 256 // practical ceiling for the Java heap, even w/ largeHeap
+            Tier.LOW -> 48    // Fire Stick 1st gen etc.
+            Tier.MID -> 128
+            Tier.HIGH -> 256
+            Tier.VHIGH -> 384 // aggressive heap ceiling — needs largeHeap + ~512MB heap
         }
         return mb * 1024 * 1024
     }
 
-    /** libVLC network-caching in ms (also the startup latency — keep modest). */
+    /**
+     * libVLC network-caching in ms (also the startup latency). Native memory,
+     * so we can afford a big buffer; the cost is latency before first frame.
+     * At 80 Mb/s these cost: LOW ~38MB, MID ~75MB, HIGH ~125MB, VHIGH ~188MB
+     * of native RAM.
+     */
     fun libVlcCachingMs(ctx: Context): Int = when (ramTier(ctx)) {
-        Tier.LOW -> 1500
-        else -> 3000
+        Tier.LOW -> 3000
+        Tier.MID -> 6000
+        Tier.HIGH -> 10000
+        Tier.VHIGH -> 15000
     }
 
     private fun ramTier(ctx: Context): Tier {
