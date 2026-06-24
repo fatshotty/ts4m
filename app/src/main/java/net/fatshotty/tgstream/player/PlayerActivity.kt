@@ -4,6 +4,8 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -40,6 +42,8 @@ class PlayerActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "TgStream"
+        // Debounce before a D-pad seek is actually applied (see PlayerActivityExo).
+        private const val SCRUB_COMMIT_DELAY_MS = 600L
         const val EXTRA_CHANNEL = "channel"
         const val EXTRA_MESSAGES = "messages"
         const val EXTRA_CONNS = "conns"
@@ -76,6 +80,13 @@ class PlayerActivity : AppCompatActivity() {
     private var playPauseBtn: Button? = null
     private var userSeeking = false
     private val hideControls = Runnable { controlsBar?.visibility = View.GONE }
+
+    // scrub (D-pad seek preview): the seekbar moves while pressing; the actual
+    // seek is committed once the user stops (debounced).
+    private var scrubbing = false
+    private var scrubTargetMs = 0L
+    private val scrubHandler = Handler(Looper.getMainLooper())
+    private val commitScrubRunnable = Runnable { commitScrub() }
 
     // stats
     private var statsView: TextView? = null
@@ -462,14 +473,26 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     // D-pad UP toggles the nerd/info panel — universal on every remote (no INFO
-    // key needed). Intercepted before view dispatch so it works even while the
-    // on-screen controls are focused. UP/DOWN aren't used for anything else.
+    // key needed). LEFT/RIGHT (and media rewind/ff) drive the scrub-then-commit
+    // seek. Intercepted before view dispatch so they work even while the on-screen
+    // controls (the focusable SeekBar) are focused.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val code = event.keyCode
         if (event.action == KeyEvent.ACTION_DOWN &&
-            (event.keyCode == KeyEvent.KEYCODE_DPAD_UP || event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN)
+            (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN)
         ) {
             toggleStats()
             return true
+        }
+        if (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_MEDIA_REWIND ||
+            code == KeyEvent.KEYCODE_DPAD_RIGHT || code == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+        ) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                val forward = code == KeyEvent.KEYCODE_DPAD_RIGHT ||
+                    code == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+                onScrubKey(forward, event.repeatCount)
+            }
+            return true // consume DOWN and UP so the SeekBar never also seeks
         }
         return super.dispatchKeyEvent(event)
     }
@@ -482,20 +505,43 @@ class PlayerActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                 if (controlsBar?.visibility != View.VISIBLE) { togglePlay(); return true }
             }
-            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> {
-                mediaPlayer?.let {
-                    it.time = (it.time - 10_000).coerceAtLeast(0)
-                    reportProgress(it.time, !it.isPlaying, "TimeUpdate"); showControls()
-                }; return true
-            }
-            KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
-                mediaPlayer?.let {
-                    it.time = it.time + 10_000
-                    reportProgress(it.time, !it.isPlaying, "TimeUpdate"); showControls()
-                }; return true
-            }
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    // Step grows the longer the key is held (auto-repeat raises repeatCount); a
+    // single tap nudges 10s. Mirrors PlayerActivityExo.
+    private fun scrubStepMs(repeatCount: Int): Long = when {
+        repeatCount >= 15 -> 60_000
+        repeatCount >= 6 -> 30_000
+        else -> 10_000
+    }
+
+    private fun onScrubKey(forward: Boolean, repeatCount: Int) {
+        val dur = durationMs
+        if (dur <= 0) return // duration unknown yet: can't scrub
+        if (!scrubbing) {
+            scrubbing = true
+            userSeeking = true // freeze the UI loop from overwriting the seekbar
+            scrubTargetMs = (mediaPlayer?.time ?: 0).coerceIn(0, dur)
+            showControls()
+        }
+        val step = scrubStepMs(repeatCount)
+        scrubTargetMs = (scrubTargetMs + if (forward) step else -step).coerceIn(0, dur)
+        seekBar?.progress = (scrubTargetMs * 1000 / dur).toInt()
+        positionLabel?.text = fmtTime(scrubTargetMs)
+        scrubHandler.removeCallbacks(commitScrubRunnable)
+        scrubHandler.postDelayed(commitScrubRunnable, SCRUB_COMMIT_DELAY_MS)
+    }
+
+    private fun commitScrub() {
+        if (!scrubbing) return
+        scrubbing = false
+        userSeeking = false
+        val mp = mediaPlayer ?: return
+        mp.time = scrubTargetMs
+        reportProgress(scrubTargetMs, !mp.isPlaying, "TimeUpdate")
+        showControls()
     }
 
     // Position is always captured by the caller (player thread) and passed in as
@@ -525,6 +571,7 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        scrubHandler.removeCallbacks(commitScrubRunnable)
         mediaPlayer?.let {
             runCatching { it.stop() }
             runCatching { it.detachViews() }

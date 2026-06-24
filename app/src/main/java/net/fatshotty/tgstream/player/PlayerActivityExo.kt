@@ -2,12 +2,16 @@ package net.fatshotty.tgstream.player
 
 import android.graphics.Color
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
@@ -55,6 +59,10 @@ class PlayerActivityExo : AppCompatActivity() {
 
     private companion object {
         const val TAG = "TgStream"
+        // After the last D-pad press, wait this long with no further press before
+        // committing the real seek (debounce). Covers both held keys (auto-repeat)
+        // and rapid taps: the position bar scrubs live, the player seeks once.
+        const val SCRUB_COMMIT_DELAY_MS = 600L
     }
 
     private var player: ExoPlayer? = null
@@ -62,6 +70,17 @@ class PlayerActivityExo : AppCompatActivity() {
     private var reporter: EmbyReporter? = null
     private var startMs: Long = 0
     private var startReported = false
+
+    // scrub (D-pad seek preview): the bar moves while pressing, the actual seek
+    // is committed once the user stops (debounced).
+    private var scrubOverlay: View? = null
+    private var scrubBar: ProgressBar? = null
+    private var scrubPosLabel: TextView? = null
+    private var scrubDurLabel: TextView? = null
+    private var scrubbing = false
+    private var scrubTargetMs = 0L
+    private val scrubHandler = Handler(Looper.getMainLooper())
+    private val commitScrubRunnable = Runnable { commitScrub() }
 
     // stats
     private var statsView: TextView? = null
@@ -139,6 +158,34 @@ class PlayerActivityExo : AppCompatActivity() {
             setOnClickListener { toggleStats() }
         }
         root.addView(infoBtn)
+
+        // Scrub overlay (bottom): position — progress bar — duration. Shown only
+        // while the user is seeking with the D-pad; hidden once the seek commits.
+        val scrub = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(Color.argb(160, 0, 0, 0))
+            setPadding(40, 24, 40, 24)
+            visibility = View.GONE
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { gravity = Gravity.BOTTOM; setMargins(48, 0, 48, 48) }
+        }
+        val posLbl = TextView(this).apply {
+            setTextColor(Color.WHITE); textSize = 14f; setPadding(0, 0, 24, 0); text = "0:00"
+        }
+        val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val durLbl = TextView(this).apply {
+            setTextColor(Color.WHITE); textSize = 14f; setPadding(24, 0, 0, 0); text = "0:00"
+        }
+        scrub.addView(posLbl); scrub.addView(bar); scrub.addView(durLbl)
+        root.addView(scrub)
+        scrubOverlay = scrub; scrubBar = bar; scrubPosLabel = posLbl; scrubDurLabel = durLbl
+
         setContentView(root)
 
         val httpFactory = DefaultHttpDataSource.Factory()
@@ -260,15 +307,62 @@ class PlayerActivityExo : AppCompatActivity() {
     }
 
     // D-pad UP/DOWN toggles the nerd panel — universal on every remote, no INFO
-    // key needed. Intercepted before the PlayerView controller sees it.
+    // key needed. LEFT/RIGHT (and media rewind/ff) drive the scrub-then-commit
+    // seek. All are intercepted here, before the PlayerView controller sees them,
+    // because on some TV boxes the controller swallows the keys without seeking.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val code = event.keyCode
         if (event.action == KeyEvent.ACTION_DOWN &&
-            (event.keyCode == KeyEvent.KEYCODE_DPAD_UP || event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN)
+            (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN)
         ) {
             toggleStats()
             return true
         }
+        if (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_MEDIA_REWIND ||
+            code == KeyEvent.KEYCODE_DPAD_RIGHT || code == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+        ) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                val forward = code == KeyEvent.KEYCODE_DPAD_RIGHT ||
+                    code == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+                onScrubKey(forward, event.repeatCount)
+            }
+            return true // consume DOWN and UP so the controller never also seeks
+        }
         return super.dispatchKeyEvent(event)
+    }
+
+    // Step grows the longer the key is held (auto-repeat raises repeatCount), so a
+    // long press covers ground fast while a single tap nudges 10s. Separate taps
+    // each start at repeatCount 0 → a precise 10s nudge.
+    private fun scrubStepMs(repeatCount: Int): Long = when {
+        repeatCount >= 15 -> 60_000
+        repeatCount >= 6 -> 30_000
+        else -> 10_000
+    }
+
+    private fun onScrubKey(forward: Boolean, repeatCount: Int) {
+        val p = player ?: return
+        val dur = p.duration
+        if (dur <= 0) return // duration unknown (not prepared / live): can't scrub
+        if (!scrubbing) {
+            scrubbing = true
+            scrubTargetMs = p.currentPosition.coerceIn(0, dur)
+            scrubOverlay?.visibility = View.VISIBLE
+        }
+        val step = scrubStepMs(repeatCount)
+        scrubTargetMs = (scrubTargetMs + if (forward) step else -step).coerceIn(0, dur)
+        scrubBar?.progress = (scrubTargetMs * 1000 / dur).toInt()
+        scrubPosLabel?.text = fmtTime(scrubTargetMs)
+        scrubDurLabel?.text = fmtTime(dur)
+        scrubHandler.removeCallbacks(commitScrubRunnable)
+        scrubHandler.postDelayed(commitScrubRunnable, SCRUB_COMMIT_DELAY_MS)
+    }
+
+    private fun commitScrub() {
+        if (!scrubbing) return
+        scrubbing = false
+        scrubOverlay?.visibility = View.GONE
+        player?.seekTo(scrubTargetMs)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -435,6 +529,7 @@ class PlayerActivityExo : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        scrubHandler.removeCallbacks(commitScrubRunnable)
         playerView?.player = null
         player?.release()
         player = null
