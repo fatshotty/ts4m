@@ -69,9 +69,13 @@ type Engine struct {
 
 	proxy *proxyServer
 
-	// per-channel document cache (msgID -> *tg.Document), guarded by docMu
-	docMu sync.Mutex
-	docs  map[string]*tg.Document // key: "<channelID>:<msgID>"
+	// per-channel document cache (msgID -> *tg.Document), guarded by docMu.
+	// docInflight de-duplicates concurrent getMessages for the same key so a
+	// burst of player requests (HEAD+GET, seeks, parallel conns) can't fan out
+	// into N simultaneous channels.getMessages calls and trip a FLOOD_WAIT.
+	docMu       sync.Mutex
+	docs        map[string]*tg.Document // key: "<channelID>:<msgID>"
+	docInflight map[string]*docCall     // key: "<channelID>:<msgID>"
 
 	// resolved InputChannel cache (channelID -> InputChannelClass). Avoids a
 	// per-request peer lookup that can queue on the main connection and add ~1s
@@ -105,8 +109,9 @@ func NewEngine(apiID int, apiHash string, sessionFile string) *Engine {
 		pwdCh:      make(chan string, 1),
 		readyCh:    make(chan struct{}),
 		shutdownCh: make(chan struct{}),
-		docs:       make(map[string]*tg.Document),
-		chanCache:  make(map[int64]tg.InputChannelClass),
+		docs:        make(map[string]*tg.Document),
+		docInflight: make(map[string]*docCall),
+		chanCache:   make(map[int64]tg.InputChannelClass),
 		dlCtx:      dlCtx,
 		dlCancel:   dlCancel,
 	}

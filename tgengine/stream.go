@@ -24,7 +24,7 @@ const (
 
 	// buildTag is stamped on every stream request so the log unambiguously
 	// identifies the running engine build. Bump it on every engine change.
-	buildTag = "media-2"
+	buildTag = "media-3"
 )
 
 // proxyServer is the localhost HTTP server ExoPlayer streams from.

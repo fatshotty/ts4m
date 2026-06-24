@@ -3,9 +3,11 @@ package tgengine
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/gotd/td/telegram/peers"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 )
 
 // normalizeChannelID accepts a raw channel id (positive) or a "marked" id as
@@ -156,9 +158,19 @@ func (e *Engine) resolveChannel(ctx context.Context, channelID int64) (tg.InputC
 	return input, nil
 }
 
+// docCall is an in-flight fetchDocument, shared by every caller that asks for
+// the same (channelID, msgID) while the first call is still running.
+type docCall struct {
+	done chan struct{}
+	doc  *tg.Document
+	err  error
+}
+
 // fetchDocument returns the document for a single message id in a channel,
-// caching by (channelID, msgID).
-func (e *Engine) fetchDocument(ctx context.Context, channelID int64, input tg.InputChannelClass, msgID int) (*tg.Document, error) {
+// caching by (channelID, msgID). Concurrent callers for the same key share a
+// single channels.getMessages call (single-flight) so a burst of player
+// requests can't fan out into N metadata calls and trip a FLOOD_WAIT.
+func (e *Engine) fetchDocument(_ context.Context, channelID int64, input tg.InputChannelClass, msgID int) (*tg.Document, error) {
 	key := fmt.Sprintf("%d:%d", channelID, msgID)
 
 	e.docMu.Lock()
@@ -166,24 +178,76 @@ func (e *Engine) fetchDocument(ctx context.Context, channelID int64, input tg.In
 		e.docMu.Unlock()
 		return d, nil
 	}
+	if call, ok := e.docInflight[key]; ok {
+		// Someone else is already fetching this exact message; wait for it
+		// instead of issuing a duplicate (flood-prone) getMessages.
+		e.docMu.Unlock()
+		<-call.done
+		return call.doc, call.err
+	}
+	call := &docCall{done: make(chan struct{})}
+	e.docInflight[key] = call
 	e.docMu.Unlock()
 
-	res, err := e.api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
-		Channel: input,
-		ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("channels.getMessages msg %d: %w", msgID, err)
-	}
-	doc, err := documentOf(res)
-	if err != nil {
-		return nil, fmt.Errorf("msg %d: %w", msgID, err)
-	}
+	doc, err := e.getMessageDocument(channelID, input, msgID)
 
 	e.docMu.Lock()
-	e.docs[key] = doc
+	if err == nil {
+		e.docs[key] = doc
+	}
+	delete(e.docInflight, key)
 	e.docMu.Unlock()
-	return doc, nil
+
+	call.doc, call.err = doc, err
+	close(call.done)
+	return doc, err
+}
+
+// getMessageDocument performs the actual channels.getMessages call with
+// flood-wait and transient-error handling, mirroring getChunk. It runs on the
+// engine-lived dlCtx (NOT a per-request context): a metadata fetch must survive
+// a player seek/abort that cancels the HTTP request, otherwise the cancellation
+// races the single-flight slot and the next request re-issues getMessages,
+// extending Telegram's flood timer into a permanent block.
+func (e *Engine) getMessageDocument(channelID int64, input tg.InputChannelClass, msgID int) (*tg.Document, error) {
+	ctx := e.dlCtx
+	const maxAttempts = 6
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		res, err := e.api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+			Channel: input,
+			ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}},
+		})
+		if err != nil {
+			if d, ok := tgerr.AsFloodWait(err); ok {
+				logW("getMessages flood wait %v on channel=%d msg=%d (attempt %d)", d, channelID, msgID, attempt)
+				select {
+				case <-time.After(d):
+					continue
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			// Transient connection blip: brief backoff and retry.
+			if attempt < maxAttempts-1 {
+				logW("getMessages channel=%d msg=%d transient: %v (retry %d)", channelID, msgID, err, attempt)
+				select {
+				case <-time.After(300 * time.Millisecond):
+					continue
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			logE("getMessages channel=%d msg=%d failed: %v", channelID, msgID, err)
+			return nil, fmt.Errorf("channels.getMessages msg %d: %w", msgID, err)
+		}
+		doc, err := documentOf(res)
+		if err != nil {
+			logE("getMessages channel=%d msg=%d: %v", channelID, msgID, err)
+			return nil, fmt.Errorf("msg %d: %w", msgID, err)
+		}
+		return doc, nil
+	}
+	return nil, fmt.Errorf("getMessages msg %d: too many retries", msgID)
 }
 
 // refreshDocument forces a re-fetch (used when a file reference expires).
