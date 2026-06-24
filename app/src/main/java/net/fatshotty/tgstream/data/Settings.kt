@@ -17,6 +17,14 @@ object Settings {
     private const val KEY_BUFFER = "buffer_mode"
     private const val KEY_SW_DECODE = "force_sw_decode"
     private const val KEY_DISK_CACHE = "disk_cache"
+    private const val KEY_PREBUFFER = "prebuffer_seconds"
+
+    // Startup/seek pre-buffer (ExoPlayer dynamic mode). 0 = AUTO (bitrate-scaled,
+    // up to 5s); otherwise a fixed number of seconds to bank before playback. A
+    // bigger value buys a longer smooth run on marginal devices at the cost of a
+    // longer wait at start/after seek.
+    const val PREBUFFER_AUTO = 0
+    val PREBUFFER_CHOICES = listOf(PREBUFFER_AUTO, 5, 10, 15, 20, 30)
 
     const val ENGINE_EXO = "exo"
     const val ENGINE_VLC = "vlc"
@@ -93,6 +101,12 @@ object Settings {
     fun getDiskCache(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_DISK_CACHE, false)
     fun setDiskCache(ctx: Context, on: Boolean) {
         prefs(ctx).edit().putBoolean(KEY_DISK_CACHE, on).apply()
+    }
+
+    /** Pre-buffer seconds: 0 = AUTO (bitrate-scaled), else a fixed value. */
+    fun getPreBufferSeconds(ctx: Context): Int = prefs(ctx).getInt(KEY_PREBUFFER, PREBUFFER_AUTO)
+    fun setPreBufferSeconds(ctx: Context, s: Int) {
+        prefs(ctx).edit().putInt(KEY_PREBUFFER, s).apply()
     }
 
     fun isConfigured(ctx: Context): Boolean =

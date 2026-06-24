@@ -119,6 +119,26 @@ class SettingsActivity : AppCompatActivity() {
         cacheBtn.setOnClickListener { diskCache = !diskCache; renderCache() }
         root.addView(cacheBtn)
 
+        root.addView(TextView(this).apply {
+            text = "Pre-buffer avvio/seek (solo buffer dinamico)"
+            textSize = 16f
+            setPadding(0, 40, 0, 8)
+        })
+        // Seconds of media to bank before playback starts (and after a seek). AUTO
+        // scales it on the stream bitrate (up to ~5s); a fixed value banks a bigger
+        // reserve — longer wait at start, smoother run on marginal devices.
+        var prebuffer = Settings.getPreBufferSeconds(this)
+        val prebufBtn = Button(this).apply { isFocusable = true }
+        fun prebufLabel(s: Int) = if (s == Settings.PREBUFFER_AUTO) "AUTO (alto, calcolato)" else "${s}s"
+        fun renderPrebuf() { prebufBtn.text = "Pre-buffer: ${prebufLabel(prebuffer)} — tocca per cambiare" }
+        renderPrebuf()
+        prebufBtn.setOnClickListener {
+            val c = Settings.PREBUFFER_CHOICES
+            prebuffer = c[(c.indexOf(prebuffer).coerceAtLeast(0) + 1) % c.size]
+            renderPrebuf()
+        }
+        root.addView(prebufBtn)
+
         val save = Button(this).apply {
             text = "Salva"
             isFocusable = true
@@ -130,6 +150,7 @@ class SettingsActivity : AppCompatActivity() {
                 Settings.setBufferMode(this@SettingsActivity, buffer)
                 Settings.setForceSwDecode(this@SettingsActivity, forceSw)
                 Settings.setDiskCache(this@SettingsActivity, diskCache)
+                Settings.setPreBufferSeconds(this@SettingsActivity, prebuffer)
                 Toast.makeText(this@SettingsActivity, "Salvato", Toast.LENGTH_SHORT).show()
                 finish()
             }

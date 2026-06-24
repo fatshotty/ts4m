@@ -323,13 +323,26 @@ class PlayerActivityExo : AppCompatActivity() {
      */
     private fun applyStartBuffer() {
         val dlc = dynamicLoadControl ?: return
+        val pref = Settings.getPreBufferSeconds(this)
         val total = totalBytes
         val dur = durationMs
-        if (total <= 0 || dur <= 0) return
-        val mbps = total * 8.0 / (dur / 1000.0) / 1_000_000.0
-        val ms = (mbps / 90.0 * 5000.0).coerceIn(1500.0, 5000.0)
+        var ms: Double = if (pref > 0) {
+            pref * 1000.0 // fixed user choice
+        } else {
+            // AUTO: scale on bitrate (needs total+duration), ~1.5s..5s.
+            if (total <= 0 || dur <= 0) return
+            val mbps = total * 8.0 / (dur / 1000.0) / 1_000_000.0
+            (mbps / 90.0 * 5000.0).coerceIn(1500.0, 5000.0)
+        }
+        // Clamp so the cushion fits ExoPlayer's RAM cap at this bitrate; otherwise a
+        // large fixed value at high bitrate could never be reached → never starts.
+        if (total > 0 && dur > 0) {
+            val bytesPerSec = total.toDouble() / (dur / 1000.0)
+            val maxMs = 0.85 * BufferTuning.exoBytes(BufferTuning.Tier.VHIGH) / bytesPerSec * 1000.0
+            if (ms > maxMs) ms = maxMs
+        }
         dlc.startBufferUs = (ms * 1000).toLong()
-        AppLog.i(TAG, "start buffer ${ms.toInt()}ms (bitrate ${mbps.toInt()} Mbps)")
+        AppLog.i(TAG, "start buffer ${ms.toInt()}ms (pref=${if (pref > 0) "${pref}s" else "auto"})")
     }
 
     // D-pad UP/DOWN toggles the nerd panel — universal on every remote, no INFO
