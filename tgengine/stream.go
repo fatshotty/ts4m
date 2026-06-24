@@ -23,9 +23,16 @@ const (
 	chunkSize   = 1024 * 1024 // 1 MiB download chunk (aligned to GetFile boundaries)
 	maxPoolSize = 16          // upper bound of connections per DC pool
 
+	// tailProbeWindow is how close to EOF a concurrent range request must start to
+	// be treated as a player's container-index probe (e.g. MKV Cues) rather than a
+	// reopened main read. Index probes are served directly without disturbing the
+	// disk-cache ring; a mid-stream concurrent read instead means the main reader
+	// moved and the ring's owner is now orphaned.
+	tailProbeWindow = 16 << 20 // 16 MiB
+
 	// buildTag is stamped on every stream request so the log unambiguously
 	// identifies the running engine build. Bump it on every engine change.
-	buildTag = "media-4"
+	buildTag = "media-5"
 )
 
 // proxyServer is the localhost HTTP server ExoPlayer streams from.
@@ -166,10 +173,24 @@ func (p *proxyServer) handleStream(w http.ResponseWriter, r *http.Request) {
 		} else if ring != nil {
 			err := ring.serve(ctx, w, start, end)
 			if errors.Is(err, errRingBusy) {
-				// A concurrent request (e.g. an MKV tail/Cues probe) while the
-				// main reader owns the ring: stream it directly so it can't
-				// seek-thrash the shared producer. Fall through to streamRange.
-				logI("diskcache: ring busy, serving bytes %d-%d direct", start, end)
+				// The ring already has an owner. Two cases:
+				if start >= total-tailProbeWindow {
+					// (a) A small probe near EOF (MKV Cues/index) while the main
+					// reader owns the ring: serve it directly and leave the ring
+					// intact for the main reader.
+					logI("diskcache: ring busy (tail probe), serving bytes %d-%d direct", start, end)
+				} else {
+					// (b) A concurrent mid-stream read: the player reopened its
+					// main connection at a new offset and abandoned the one that
+					// owns the ring (ExoPlayer does this WITHOUT closing the old
+					// socket, so the old serve() stays blocked on Write and keeps
+					// owning the ring). The orphaned producer would keep competing
+					// for the media pool and starve this real reader, so drop the
+					// cache and serve everything directly from here on.
+					logW("diskcache: ring busy at offset %d (player reopened mid-stream); dropping cache, serving direct", start)
+					go e.clearRing()
+				}
+				// fall through to streamRange
 			} else {
 				if err != nil {
 					logW("stream ended (cached): %v", err)
