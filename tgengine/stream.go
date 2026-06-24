@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -24,7 +25,7 @@ const (
 
 	// buildTag is stamped on every stream request so the log unambiguously
 	// identifies the running engine build. Bump it on every engine change.
-	buildTag = "media-3"
+	buildTag = "media-4"
 )
 
 // proxyServer is the localhost HTTP server ExoPlayer streams from.
@@ -163,10 +164,18 @@ func (p *proxyServer) handleStream(w http.ResponseWriter, r *http.Request) {
 		if rerr != nil {
 			logW("diskcache: init failed (%v); serving direct", rerr)
 		} else if ring != nil {
-			if err := ring.serve(ctx, w, start, end); err != nil {
-				logW("stream ended (cached): %v", err)
+			err := ring.serve(ctx, w, start, end)
+			if errors.Is(err, errRingBusy) {
+				// A concurrent request (e.g. an MKV tail/Cues probe) while the
+				// main reader owns the ring: stream it directly so it can't
+				// seek-thrash the shared producer. Fall through to streamRange.
+				logI("diskcache: ring busy, serving bytes %d-%d direct", start, end)
+			} else {
+				if err != nil {
+					logW("stream ended (cached): %v", err)
+				}
+				return
 			}
-			return
 		}
 	}
 

@@ -45,6 +45,14 @@ const (
 // requested; it is never surfaced to the player.
 var errSeekAbort = errors.New("diskcache: run aborted")
 
+// errRingBusy is returned by serve when another consumer already owns the ring.
+// The ring has a single producer/read position, so it can back exactly one
+// continuous reader. Players issue concurrent range requests (e.g. an MKV tail
+// probe for the Cues index while the head streams), and letting a second reader
+// in would make the two fight over the single producer position (seek thrash).
+// The caller serves the losing request directly from Telegram instead.
+var errRingBusy = errors.New("diskcache: ring busy")
+
 // durationOf returns the video duration (seconds) declared on a document, or 0.
 func durationOf(doc *tg.Document) float64 {
 	for _, a := range doc.Attributes {
@@ -100,6 +108,7 @@ type diskRing struct {
 	readPos   int64              // consumer position; producer won't overwrite >= readPos
 	seekReq   int64              // requested reposition offset, or -1
 	curCancel context.CancelFunc // cancels the in-flight streamRange run
+	active    bool               // a consumer currently owns serve() (single reader)
 	closed    bool
 	err       error
 	done      chan struct{} // closed when run() returns
@@ -264,7 +273,30 @@ func (r *diskRing) put(off int64, data []byte) error {
 
 // serve streams logical bytes [a,b] to w from the ring, repositioning the
 // producer on an out-of-window seek and waiting for the producer to fill ahead.
+//
+// The ring backs a single continuous reader: it owns one producer position. If a
+// reader is already active, serve returns errRingBusy so the caller streams this
+// (concurrent) request directly from Telegram instead of letting it hijack the
+// shared producer — otherwise the two readers seek-thrash and playback stalls.
 func (r *diskRing) serve(ctx context.Context, w io.Writer, a, b int64) error {
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return nil
+	}
+	if r.active {
+		r.mu.Unlock()
+		return errRingBusy
+	}
+	r.active = true
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		r.active = false
+		r.cond.Broadcast()
+		r.mu.Unlock()
+	}()
+
 	r.mu.Lock()
 	if a < r.base || a > r.head {
 		r.requestSeekLocked(a) // out of resident window → reposition producer
