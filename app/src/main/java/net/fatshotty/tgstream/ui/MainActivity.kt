@@ -31,7 +31,8 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        if (!Settings.isConfigured(this)) {
+        // A pure client box (remote proxy set) needs no Telegram login of its own.
+        if (!Settings.isConfigured(this) && !Settings.isRemoteClient(this)) {
             startActivity(Intent(this, LoginActivity::class.java))
             finish()
             return
@@ -71,6 +72,13 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent(this@MainActivity, SpeedTestActivity::class.java))
             }
         }
+        val serverBtn = Button(this).apply {
+            text = "Condivisione WiFi (server)"
+            isFocusable = true
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, ServerActivity::class.java))
+            }
+        }
         updateBtn = Button(this).apply {
             text = "Aggiorna app"
             isFocusable = true
@@ -81,16 +89,20 @@ class MainActivity : AppCompatActivity() {
         root.addView(settingsBtn)
         root.addView(logBtn)
         root.addView(speedBtn)
+        root.addView(serverBtn)
         root.addView(updateBtn)
         setContentView(root)
         root.applySystemBarInsets()
         settingsBtn.requestFocus()
 
-        Tg.start(this)
-
-        lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                Tg.state.collect { render(it) }
+        if (Settings.isRemoteClient(this)) {
+            status.text = "Modalità client: streaming dal telefono ${Settings.getRemoteHost(this)}."
+        } else {
+            Tg.start(this)
+            lifecycleScope.launch {
+                repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    Tg.state.collect { render(it) }
+                }
             }
         }
 

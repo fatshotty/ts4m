@@ -105,8 +105,14 @@ class PlayerActivityExo : AppCompatActivity() {
         startMs = intent.getLongExtra(PlayerActivity.EXTRA_START_MS, 0)
         durationMs = intent.getLongExtra(PlayerActivity.EXTRA_DURATION_MS, 0)
         title = intent.getStringExtra(PlayerActivity.EXTRA_TITLE) ?: ""
+        // Prebuilt by PlayerEntryActivity: local proxy URL, or a remote phone's.
+        val streamUrl = intent.getStringExtra(PlayerActivity.EXTRA_STREAM_URL)
+            ?: Tg.streamUrl(channel, messages, conns, Settings.getDiskCache(this))
+        val remote = Settings.isRemoteClient(this)
 
-        if (channel == 0L || messages.isBlank() || Tg.proxyPort <= 0) {
+        // In local mode the on-device proxy must be up; in remote mode we stream
+        // from the phone, so the local engine/port isn't required.
+        if (channel == 0L || messages.isBlank() || (!remote && Tg.proxyPort <= 0)) {
             finish()
             return
         }
@@ -251,8 +257,8 @@ class PlayerActivityExo : AppCompatActivity() {
         player = exo
         view.player = exo
 
-        val url = Tg.streamUrl(channel, messages, conns, diskCache)
-        AppLog.i(TAG, "stream url: $url (engine=exo, ready=${Tg.isReady})")
+        val url = streamUrl
+        AppLog.i(TAG, "stream url: $url (engine=exo, remote=$remote, ready=${Tg.isReady})")
         exo.setMediaItem(MediaItem.fromUri(url))
         exo.playWhenReady = true
         exo.prepare()

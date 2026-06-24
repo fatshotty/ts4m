@@ -139,6 +139,31 @@ class SettingsActivity : AppCompatActivity() {
         }
         root.addView(prebufBtn)
 
+        root.addView(TextView(this).apply {
+            text = "Proxy remoto (streaming da un altro telefono sulla WiFi)"
+            textSize = 16f
+            setPadding(0, 40, 0, 8)
+        })
+        root.addView(TextView(this).apply {
+            text = "Lascia vuoto per usare questo dispositivo. Per usare un telefono-server, " +
+                "inserisci host:porta e codice mostrati lì in 'Condivisione WiFi'."
+            textSize = 12f
+            setPadding(0, 0, 0, 8)
+        })
+        val remoteHostField = EditText(this).apply {
+            hint = "host:porta (es. 192.168.1.50:8770)"
+            isSingleLine = true
+            setText(Settings.getRemoteHost(this@SettingsActivity))
+        }
+        root.addView(remoteHostField)
+        val remoteTokenField = EditText(this).apply {
+            hint = "codice (token)"
+            inputType = InputType.TYPE_CLASS_NUMBER
+            isSingleLine = true
+            setText(Settings.getRemoteToken(this@SettingsActivity))
+        }
+        root.addView(remoteTokenField)
+
         val save = Button(this).apply {
             text = "Salva"
             isFocusable = true
@@ -151,6 +176,8 @@ class SettingsActivity : AppCompatActivity() {
                 Settings.setForceSwDecode(this@SettingsActivity, forceSw)
                 Settings.setDiskCache(this@SettingsActivity, diskCache)
                 Settings.setPreBufferSeconds(this@SettingsActivity, prebuffer)
+                Settings.setRemoteHost(this@SettingsActivity, remoteHostField.text.toString())
+                Settings.setRemoteToken(this@SettingsActivity, remoteTokenField.text.toString())
                 Toast.makeText(this@SettingsActivity, "Salvato", Toast.LENGTH_SHORT).show()
                 finish()
             }

@@ -18,6 +18,10 @@ object Settings {
     private const val KEY_SW_DECODE = "force_sw_decode"
     private const val KEY_DISK_CACHE = "disk_cache"
     private const val KEY_PREBUFFER = "prebuffer_seconds"
+    private const val KEY_SERVER_ENABLED = "server_enabled" // phone acts as LAN proxy
+    private const val KEY_LAN_TOKEN = "lan_token"           // token for LAN clients
+    private const val KEY_REMOTE_HOST = "remote_host"       // box: "ip:port" of phone
+    private const val KEY_REMOTE_TOKEN = "remote_token"     // box: token for that phone
 
     // Startup/seek pre-buffer (ExoPlayer dynamic mode). 0 = AUTO (bitrate-scaled,
     // up to 5s); otherwise a fixed number of seconds to bank before playback. A
@@ -108,6 +112,39 @@ object Settings {
     fun setPreBufferSeconds(ctx: Context, s: Int) {
         prefs(ctx).edit().putInt(KEY_PREBUFFER, s).apply()
     }
+
+    // --- LAN sharing: phone "server mode" ---
+
+    /** Whether this device serves its proxy to other devices on the WiFi. */
+    fun getServerEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_SERVER_ENABLED, false)
+    fun setServerEnabled(ctx: Context, on: Boolean) {
+        prefs(ctx).edit().putBoolean(KEY_SERVER_ENABLED, on).apply()
+    }
+
+    /** Stable per-install LAN token, generated on first use. */
+    fun getLanToken(ctx: Context): String {
+        val cur = prefs(ctx).getString(KEY_LAN_TOKEN, "") ?: ""
+        if (cur.isNotBlank()) return cur
+        val gen = (100000..999999).random().toString() // 6-digit, easy to type on a TV
+        prefs(ctx).edit().putString(KEY_LAN_TOKEN, gen).apply()
+        return gen
+    }
+
+    // --- LAN sharing: box "client mode" (points at a phone's proxy) ---
+
+    /** "ip:port" of the phone serving the proxy, or blank to use the local engine. */
+    fun getRemoteHost(ctx: Context): String = prefs(ctx).getString(KEY_REMOTE_HOST, "") ?: ""
+    fun setRemoteHost(ctx: Context, v: String) {
+        prefs(ctx).edit().putString(KEY_REMOTE_HOST, v.trim()).apply()
+    }
+
+    fun getRemoteToken(ctx: Context): String = prefs(ctx).getString(KEY_REMOTE_TOKEN, "") ?: ""
+    fun setRemoteToken(ctx: Context, v: String) {
+        prefs(ctx).edit().putString(KEY_REMOTE_TOKEN, v.trim()).apply()
+    }
+
+    /** True when this device should stream from a remote phone instead of its own engine. */
+    fun isRemoteClient(ctx: Context): Boolean = getRemoteHost(ctx).isNotBlank()
 
     fun isConfigured(ctx: Context): Boolean =
         getApiId(ctx) > 0 && getApiHash(ctx).isNotBlank()

@@ -35,14 +35,15 @@ class PlayerEntryActivity : AppCompatActivity() {
             return
         }
         Settings.setLastUrl(this, uri.toString()) // for the in-app speed test
-        if (!Settings.isConfigured(this)) {
+        val remote = Settings.isRemoteClient(this)
+        // Client mode streams from a paired phone's proxy → no local engine/login.
+        if (!remote && !Settings.isConfigured(this)) {
             Toast.makeText(this, "Configura prima Telegram", Toast.LENGTH_LONG).show()
             startActivity(Intent(this, LoginActivity::class.java))
             finish()
             return
         }
-
-        Tg.start(this)
+        if (!remote) Tg.start(this)
 
         lifecycleScope.launch {
             try {
@@ -52,7 +53,7 @@ class PlayerEntryActivity : AppCompatActivity() {
 
                 val result: ResolveResult = withContext(Dispatchers.IO) { provider.resolve(uri) }
 
-                if (!Tg.awaitReady()) {
+                if (!remote && !Tg.awaitReady()) {
                     fail("Telegram non pronto/loggato")
                     return@launch
                 }
@@ -68,11 +69,21 @@ class PlayerEntryActivity : AppCompatActivity() {
 
     private fun launchPlayer(r: ResolveResult) {
         val conns = Settings.getConnections(this)
+        val streamUrl = if (Settings.isRemoteClient(this)) {
+            Tg.remoteStreamUrl(
+                Settings.getRemoteHost(this), Settings.getRemoteToken(this),
+                r.stream.channelId, r.stream.messagesDash, conns,
+            )
+        } else {
+            Tg.streamUrl(r.stream.channelId, r.stream.messagesDash, conns, Settings.getDiskCache(this))
+        }
+        AppLog.i(TAG, "stream url: $streamUrl (remote=${Settings.isRemoteClient(this)})")
         val playerClass = if (Settings.getPlayerEngine(this) == Settings.ENGINE_VLC)
             PlayerActivity::class.java else PlayerActivityExo::class.java
         val i = Intent(this, playerClass).apply {
             putExtra(PlayerActivity.EXTRA_CHANNEL, r.stream.channelId)
             putExtra(PlayerActivity.EXTRA_MESSAGES, r.stream.messagesDash)
+            putExtra(PlayerActivity.EXTRA_STREAM_URL, streamUrl)
             putExtra(PlayerActivity.EXTRA_CONNS, conns)
             putExtra(PlayerActivity.EXTRA_TITLE, r.stream.title)
             putExtra(PlayerActivity.EXTRA_START_MS, r.stream.startPositionMs)

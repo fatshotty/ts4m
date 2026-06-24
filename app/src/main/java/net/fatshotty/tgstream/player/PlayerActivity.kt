@@ -46,6 +46,7 @@ class PlayerActivity : AppCompatActivity() {
         private const val SCRUB_COMMIT_DELAY_MS = 600L
         const val EXTRA_CHANNEL = "channel"
         const val EXTRA_MESSAGES = "messages"
+        const val EXTRA_STREAM_URL = "stream_url" // prebuilt URL (local or remote proxy)
         const val EXTRA_CONNS = "conns"
         const val EXTRA_TITLE = "title"
         const val EXTRA_START_MS = "start_ms"
@@ -110,7 +111,8 @@ class PlayerActivity : AppCompatActivity() {
         durationMs = intent.getLongExtra(EXTRA_DURATION_MS, 0)
         title = intent.getStringExtra(EXTRA_TITLE) ?: ""
 
-        if (channel == 0L || messages.isBlank() || Tg.proxyPort <= 0) {
+        val remote = net.fatshotty.tgstream.data.Settings.isRemoteClient(this)
+        if (channel == 0L || messages.isBlank() || (!remote && Tg.proxyPort <= 0)) {
             finish()
             return
         }
@@ -129,8 +131,9 @@ class PlayerActivity : AppCompatActivity() {
         buildUi()
 
         val diskCache = net.fatshotty.tgstream.data.Settings.getDiskCache(this)
-        val url = Tg.streamUrl(channel, messages, conns, diskCache)
-        AppLog.i(TAG, "stream url: $url (engineReady=${Tg.isReady}, diskCache=$diskCache)")
+        val url = intent.getStringExtra(EXTRA_STREAM_URL)
+            ?: Tg.streamUrl(channel, messages, conns, diskCache)
+        AppLog.i(TAG, "stream url: $url (remote=$remote, engineReady=${Tg.isReady}, diskCache=$diskCache)")
 
         // libVLC's network cache is fixed at media init and cannot be resized at
         // runtime, so "dynamic" can't ramp here — it falls back to a fixed tier.
