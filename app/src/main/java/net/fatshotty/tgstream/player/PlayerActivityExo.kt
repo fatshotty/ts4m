@@ -207,17 +207,22 @@ class PlayerActivityExo : AppCompatActivity() {
         // "dynamic" mode the cap ramps LOW→HIGH→VHIGH over the first 20s of play.
         val bufferMode = Settings.getBufferMode(this)
         val diskCache = Settings.getDiskCache(this)
-        val loadControl = if (diskCache) {
-            // Disk cache on: the Go proxy holds the look-ahead off-heap (50–250 MB),
-            // so ExoPlayer only needs a small RAM buffer for decode smoothness. This
-            // keeps us off largeHeap and lets high-bitrate streams play on low-RAM
-            // boxes that can't afford a 256–384 MB heap buffer.
-            DefaultLoadControl.Builder()
-                .setBufferDurationsMs(10_000, 60_000, 1_000, 1_500)
-                .setTargetBufferBytes(BufferTuning.exoBytes(BufferTuning.Tier.LOW))
-                .setPrioritizeTimeOverSizeThresholds(false)
-                .build()
-        } else if (bufferMode == Settings.BUFFER_DYNAMIC) {
+        // The buffer mode is independent of the disk cache. The disk cache is a Go
+        // proxy feature (off-heap look-ahead); ExoPlayer's RAM buffer always follows
+        // the user's chosen mode. Previously disk-cache ON forced a fixed LOW buffer
+        // and IGNORED "dynamic", which (a) defeated the per-film adaptation and (b)
+        // deadlocked at high bitrate (see minBufferMs note below).
+        //
+        // CRITICAL: minBufferMs must stay below what targetBufferBytes can hold at the
+        // stream's bitrate. With prioritizeTimeOverSizeThresholds=false the byte cap
+        // stops loading first; if it is reached before minBufferMs worth of media is
+        // buffered (e.g. 48 MB ≈ 7.8s at 49 Mbps but minBuffer was 10–15s), ExoPlayer
+        // can never satisfy the minimum and dies with "Playback stuck buffering and
+        // not loading". 2.5s is reachable within 48 MB up to ~150 Mbps, so the byte
+        // cap alone governs depth. (DynamicLoadControl is safe — its anti-stall clause
+        // keeps loading below its minimum regardless of the ramped cap.)
+        val minBufferMs = 2_500
+        val loadControl = if (bufferMode == Settings.BUFFER_DYNAMIC) {
             DynamicLoadControl(
                 lowBytes = BufferTuning.exoBytes(BufferTuning.Tier.LOW),
                 highBytes = BufferTuning.exoBytes(BufferTuning.Tier.HIGH),
@@ -225,7 +230,7 @@ class PlayerActivityExo : AppCompatActivity() {
             )
         } else {
             DefaultLoadControl.Builder()
-                .setBufferDurationsMs(15_000, 300_000, 1_000, 1_500)
+                .setBufferDurationsMs(minBufferMs, 300_000, 1_000, 2_000)
                 .setTargetBufferBytes(BufferTuning.exoBytes(BufferTuning.tierForMode(bufferMode)))
                 .setPrioritizeTimeOverSizeThresholds(false)
                 .build()
