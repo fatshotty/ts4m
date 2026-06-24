@@ -44,6 +44,14 @@ class DynamicLoadControl(
 
     @Volatile private var startedAtMs = 0L
 
+    /**
+     * Buffer (µs) that must be filled before playback starts — and before it
+     * resumes after a seek/rebuffer. Larger than ExoPlayer's tiny default so the
+     * picture starts with a cushion and stays smooth. The player sets this from the
+     * stream bitrate (light files ~1.5s; heavy ~90 Mb/s files up to 5s).
+     */
+    @Volatile var startBufferUs: Long = DEFAULT_START_BUFFER_US
+
     /** Effective byte cap for the elapsed playback time. */
     fun currentCapBytes(): Int {
         val started = startedAtMs
@@ -106,8 +114,13 @@ class DynamicLoadControl(
     override fun retainBackBufferFromKeyframe(playerId: PlayerId): Boolean =
         inner.retainBackBufferFromKeyframe(playerId)
 
-    override fun shouldStartPlayback(parameters: LoadControl.Parameters): Boolean =
-        inner.shouldStartPlayback(parameters)
+    override fun shouldStartPlayback(parameters: LoadControl.Parameters): Boolean {
+        // Hold playback until a bitrate-scaled cushion is buffered. Applies both to
+        // the initial start and to resuming after a seek/rebuffer (ExoPlayer gates
+        // both through here), trading a longer wait for smoother playback.
+        if (parameters.bufferedDurationUs < startBufferUs) return false
+        return inner.shouldStartPlayback(parameters)
+    }
 
     override fun shouldContinuePreloading(
         timeline: Timeline,
@@ -120,5 +133,6 @@ class DynamicLoadControl(
         const val MAX_BUFFER_MS = 300_000
         const val RAMP_TO_HIGH_MS = 10_000L
         const val RAMP_TO_VHIGH_MS = 20_000L
+        const val DEFAULT_START_BUFFER_US = 3_000_000L // 3s until the bitrate is known
     }
 }

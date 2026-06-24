@@ -87,6 +87,8 @@ class PlayerActivityExo : AppCompatActivity() {
     private var statsVisible = false
     private var title: String = ""
     private var conns: Int = 1
+    private var durationMs: Long = 0
+    private var dynamicLoadControl: DynamicLoadControl? = null
     private val bytesTransferred = AtomicLong(0)
     @Volatile private var totalBytes: Long = -1
     private var lastBytes = 0L
@@ -101,6 +103,7 @@ class PlayerActivityExo : AppCompatActivity() {
         val messages = intent.getStringExtra(PlayerActivity.EXTRA_MESSAGES) ?: ""
         conns = intent.getIntExtra(PlayerActivity.EXTRA_CONNS, 3)
         startMs = intent.getLongExtra(PlayerActivity.EXTRA_START_MS, 0)
+        durationMs = intent.getLongExtra(PlayerActivity.EXTRA_DURATION_MS, 0)
         title = intent.getStringExtra(PlayerActivity.EXTRA_TITLE) ?: ""
 
         if (channel == 0L || messages.isBlank() || Tg.proxyPort <= 0) {
@@ -227,7 +230,7 @@ class PlayerActivityExo : AppCompatActivity() {
                 lowBytes = BufferTuning.exoBytes(BufferTuning.Tier.LOW),
                 highBytes = BufferTuning.exoBytes(BufferTuning.Tier.HIGH),
                 vhighBytes = BufferTuning.exoBytes(BufferTuning.Tier.VHIGH),
-            )
+            ).also { dynamicLoadControl = it; applyStartBuffer() }
         } else {
             DefaultLoadControl.Builder()
                 .setBufferDurationsMs(minBufferMs, 300_000, 1_000, 2_000)
@@ -311,6 +314,24 @@ class PlayerActivityExo : AppCompatActivity() {
         statsView?.visibility = if (statsVisible) View.VISIBLE else View.GONE
     }
 
+    /**
+     * Sizes the dynamic-buffer start cushion from the stream bitrate: ~1.5s for
+     * light files, up to ~5s for heavy (~90 Mb/s) ones. Bitrate = total/duration
+     * (duration from the launch intent, total from the HEAD probe). The cushion
+     * gates both the initial start and post-seek resume — longer wait, smoother
+     * playback. No-op until both numbers are known, and on non-dynamic modes.
+     */
+    private fun applyStartBuffer() {
+        val dlc = dynamicLoadControl ?: return
+        val total = totalBytes
+        val dur = durationMs
+        if (total <= 0 || dur <= 0) return
+        val mbps = total * 8.0 / (dur / 1000.0) / 1_000_000.0
+        val ms = (mbps / 90.0 * 5000.0).coerceIn(1500.0, 5000.0)
+        dlc.startBufferUs = (ms * 1000).toLong()
+        AppLog.i(TAG, "start buffer ${ms.toInt()}ms (bitrate ${mbps.toInt()} Mbps)")
+    }
+
     // D-pad UP/DOWN toggles the nerd panel — universal on every remote, no INFO
     // key needed. LEFT/RIGHT (and media rewind/ff) drive the scrub-then-commit
     // seek. All are intercepted here, before the PlayerView controller sees them,
@@ -392,6 +413,7 @@ class PlayerActivityExo : AppCompatActivity() {
                     val cr = r.header("Content-Range")?.substringAfterLast('/')?.toLongOrNull()
                     totalBytes = cr ?: len ?: -1
                 }
+                applyStartBuffer()
             }
         }
     }
