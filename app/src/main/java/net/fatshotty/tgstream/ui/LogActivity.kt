@@ -15,7 +15,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.launch
+import net.fatshotty.tgstream.tg.Tg
 import net.fatshotty.tgstream.util.AppLog
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * On-device log viewer. Shows the in-memory [AppLog] buffer, live, with copy
@@ -49,8 +53,29 @@ class LogActivity : AppCompatActivity() {
             text = "Pulisci"
             setOnClickListener { AppLog.clear() }
         }
+        val sendBtn = Button(this).apply {
+            text = "Invia"
+            setOnClickListener {
+                val log = AppLog.snapshot()
+                if (log.isBlank()) {
+                    Toast.makeText(this@LogActivity, "Log vuoto", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+                isEnabled = false
+                text = "Invio…"
+                Tg.sendLog("tgstream-log-$stamp.txt", log) { ok, err ->
+                    isEnabled = true
+                    text = "Invia"
+                    val msg = if (ok) "Log inviato a Messaggi salvati"
+                              else "Invio fallito: ${err ?: "errore"}"
+                    Toast.makeText(this@LogActivity, msg, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
         buttons.addView(copyBtn)
         buttons.addView(clearBtn)
+        buttons.addView(sendBtn)
 
         logView = TextView(this).apply {
             typeface = Typeface.MONOSPACE

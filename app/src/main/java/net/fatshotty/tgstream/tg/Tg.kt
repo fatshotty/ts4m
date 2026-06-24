@@ -124,6 +124,23 @@ object Tg {
         scope.launch { runCatching { engine?.clearStreamCache() } }
     }
 
+    /**
+     * Uploads [text] as a .txt to the user's Telegram Saved Messages. Runs off the
+     * main thread; [onResult] is posted back on the main thread with success and an
+     * optional error message.
+     */
+    fun sendLog(name: String, text: String, onResult: (Boolean, String?) -> Unit) {
+        val e = engine
+        if (e == null) {
+            onResult(false, "engine non inizializzato")
+            return
+        }
+        scope.launch {
+            val res = runCatching { e.sendLog(name, text) }
+            withContext(Dispatchers.Main) { onResult(res.isSuccess, res.exceptionOrNull()?.message) }
+        }
+    }
+
     /** Suspends until the engine is authorized and the proxy is up, or timeout. */
     suspend fun awaitReady(timeoutMs: Long = 60_000): Boolean = withContext(Dispatchers.IO) {
         val deadline = System.currentTimeMillis() + timeoutMs
