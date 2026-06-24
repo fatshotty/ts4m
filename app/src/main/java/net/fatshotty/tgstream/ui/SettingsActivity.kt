@@ -5,6 +5,7 @@ import android.text.InputType
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -136,8 +137,17 @@ class SettingsActivity : AppCompatActivity() {
         root.addView(TextView(this).apply { setPadding(0, 24, 0, 0) }) // spacer
         root.addView(save)
 
-        setContentView(root)
-        root.applySystemBarInsets()
-        save.requestFocus()
+        // Wrap in a ScrollView: with the disk-cache row added, the content is
+        // taller than the screen on smaller devices and the Salva button fell
+        // off-screen. isFillViewport keeps the layout filling short screens.
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(root)
+        }
+        setContentView(scroll)
+        // Insets on the ScrollView so its bottom padding lets the last row scroll
+        // clear of the navigation bar; root keeps its own content padding.
+        scroll.applySystemBarInsets()
+        connField.requestFocus()
     }
 }
