@@ -1,87 +1,88 @@
-# Buffer di riproduzione — riferimento
+# Playback buffer — reference
 
-Come vengono calcolati i livelli di buffer (LOW / MID / HIGH / VHIGH / DYNAMIC) e
-le tabelle di conversione MB ↔ secondi. Valido per **entrambi** i motori.
+How the buffer levels (LOW / MID / HIGH / VHIGH / DYNAMIC) are computed and the
+MB ↔ seconds conversion tables. Applies to **both** player engines.
 
-Sorgente dei valori: [`BufferTuning.kt`](../app/src/main/java/net/fatshotty/tgstream/util/BufferTuning.kt)
-→ `exoBytes()` e `vlcCachingMs()`. Scelta utente in Impostazioni
+Source of the values: [`BufferTuning.kt`](../app/src/main/java/net/fatshotty/tgstream/util/BufferTuning.kt)
+→ `exoBytes()` and `vlcCachingMs()`. User choice in Settings
 ([`SettingsActivity.kt`](../app/src/main/java/net/fatshotty/tgstream/ui/SettingsActivity.kt)),
-default **HIGH** (riproduce il comportamento fluido di v0.1.20 sui TV box tipici).
+default **HIGH** (reproduces the smooth v0.1.20 behaviour on typical TV boxes).
 
-## Principio
+## Principle
 
-I due motori fissano il buffer su grandezze diverse:
+The two engines pin the buffer to different quantities:
 
-- **ExoPlayer** → fissa i **MB** (il buffer vive sull'heap Java, va limitato in byte).
-  I secondi dipendono dal bitrate del file.
-- **libVLC** → fissa i **secondi** (`network-caching`, memoria nativa; è anche la
-  latenza all'avvio e l'attesa di refill dopo un seek). I MB dipendono dal bitrate.
+- **ExoPlayer** → pins the **MB** (the buffer lives on the Java heap, so it must
+  be capped in bytes). The seconds depend on the file's bitrate.
+- **libVLC** → pins the **seconds** (`network-caching`, native memory; this is
+  also the startup latency and the refill wait after a seek). The MB depend on
+  the bitrate.
 
-Conversione:
+Conversion:
 
 ```
-secondi = MB × 8 / Mbps
-MB      = secondi × Mbps / 8
+seconds = MB × 8 / Mbps
+MB      = seconds × Mbps / 8
 ```
 
-## I valori sono FISSI (non dipendono dal dispositivo)
+## The values are FIXED (not device-dependent)
 
-Il tier è una scelta esplicita dell'utente; i MB (Exo) e i secondi (VLC) sono
-costanti identiche su ogni device. La vecchia logica `autoTier()` basata sulla RAM
-**non è più usata** (codice morto, tenuto solo per riferimento).
+The tier is an explicit user choice; the MB (Exo) and the seconds (VLC) are
+constants, identical on every device. The old RAM-based `autoTier()` logic is
+**no longer used** (dead code, kept only for reference).
 
-> ⚠️ Eccezione pratica: **VHIGH (384 MB)** richiede `largeHeap` + heap ~512 MB.
-> Su hardware con poca RAM può causare `OutOfMemoryError`: il valore non viene
-> ridotto in automatico, va evitato a mano sui device deboli.
+> ⚠️ Practical exception: **VHIGH (384 MB)** requires `largeHeap` + a ~512 MB
+> heap. On low-RAM hardware it can cause `OutOfMemoryError`: the value is not
+> reduced automatically, so avoid it manually on weak devices.
 
-## ExoPlayer — MB fissi, secondi calcolati
+## ExoPlayer — fixed MB, computed seconds
 
-Tetto in byte per tier. Esiste anche un tetto di tempo separato (max buffer = 300s)
-che vincola solo sui bitrate bassi.
+Byte cap per tier. There is also a separate time cap (max buffer = 300s) that
+only binds at low bitrates.
 
-| Tier  | MB (fisso) | @20 Mb/s | @50 Mb/s | @80 Mb/s | @120 Mb/s |
+| Tier  | MB (fixed) | @20 Mb/s | @50 Mb/s | @80 Mb/s | @120 Mb/s |
 |-------|-----------:|---------:|---------:|---------:|----------:|
-| LOW   |  48 MB | 19,2 s | 7,7 s  | 4,8 s  | 3,2 s  |
-| MID   | 128 MB | 51,2 s | 20,5 s | 12,8 s | 8,5 s  |
-| HIGH  | 256 MB | 102 s  | 41 s   | 25,6 s | 17,1 s |
-| VHIGH | 384 MB | 154 s* | 61 s   | 38,4 s | 25,6 s |
+| LOW   |  48 MB | 19.2 s | 7.7 s  | 4.8 s  | 3.2 s  |
+| MID   | 128 MB | 51.2 s | 20.5 s | 12.8 s | 8.5 s  |
+| HIGH  | 256 MB | 102 s  | 41 s   | 25.6 s | 17.1 s |
+| VHIGH | 384 MB | 154 s* | 61 s   | 38.4 s | 25.6 s |
 
-\* a bitrate bassi può intervenire prima il tetto di tempo (300s).
+\* at low bitrates the time cap (300s) may kick in first.
 
-## libVLC — secondi fissi, MB calcolati
+## libVLC — fixed seconds, computed MB
 
-`network-caching` per tier (= anche latenza all'avvio e attesa dopo seek).
+`network-caching` per tier (= also startup latency and post-seek wait).
 
-| Tier  | Secondi (fisso) | @20 Mb/s | @50 Mb/s | @80 Mb/s | @120 Mb/s |
+| Tier  | Seconds (fixed) | @20 Mb/s | @50 Mb/s | @80 Mb/s | @120 Mb/s |
 |-------|----------------:|---------:|---------:|---------:|----------:|
-| LOW   |  3 s  | 7,5 MB  | 18,75 MB | 30 MB  | 45 MB  |
-| MID   |  6 s  | 15 MB   | 37,5 MB  | 60 MB  | 90 MB  |
-| HIGH  | 10 s  | 25 MB   | 62,5 MB  | 100 MB | 150 MB |
-| VHIGH | 15 s  | 37,5 MB | 93,75 MB | 150 MB | 225 MB |
+| LOW   |  3 s  | 7.5 MB  | 18.75 MB | 30 MB  | 45 MB  |
+| MID   |  6 s  | 15 MB   | 37.5 MB  | 60 MB  | 90 MB  |
+| HIGH  | 10 s  | 25 MB   | 62.5 MB  | 100 MB | 150 MB |
+| VHIGH | 15 s  | 37.5 MB | 93.75 MB | 150 MB | 225 MB |
 
-## DYNAMIC (solo ExoPlayer) — rampa automatica nel tempo
+## DYNAMIC (ExoPlayer only) — automatic ramp over time
 
-Il cap in byte cresce in base ai secondi di riproduzione trascorsi, con anti-stallo
-che tiene comunque ≥15 s bufferizzati. Implementazione:
+The byte cap grows with elapsed playback time, with an anti-stall floor that
+always keeps ≥15 s buffered. Implementation:
 [`DynamicLoadControl.kt`](../app/src/main/java/net/fatshotty/tgstream/player/DynamicLoadControl.kt).
 
-| Tempo di play | Tier  | MB     | @80 Mb/s |
+| Playback time | Tier  | MB     | @80 Mb/s |
 |---------------|-------|-------:|---------:|
-| 0–10 s        | LOW   |  48 MB | ~4,8 s  |
-| 10–20 s       | HIGH  | 256 MB | ~25,6 s |
-| 20 s +        | VHIGH | 384 MB | ~38,4 s |
+| 0–10 s        | LOW   |  48 MB | ~4.8 s  |
+| 10–20 s       | HIGH  | 256 MB | ~25.6 s |
+| 20 s +        | VHIGH | 384 MB | ~38.4 s |
 
-Su **libVLC** il "dynamic" non rampa (il cache è fisso all'init e non
-ridimensionabile a runtime): ripiega sul tier fisso **MID** (6 s).
+On **libVLC** "dynamic" does not ramp (the cache is fixed at init and can't be
+resized at runtime): it falls back to the fixed **MID** tier (6 s).
 
-## Note collegate
+## Related notes
 
-- **Ripartenza ExoPlayer:** dopo un rebuffer riprende con ~1,5 s di buffer (scelta
-  voluta, per ripartenza rapida). Il buffer ampio lo si ottiene scegliendo il tier
-  alto o DYNAMIC.
-- **Prefetch del proxy:** indipendente dal buffer del player, il proxy Go mantiene
-  ~64 MiB di video "caldo" pre-scaricato per assorbire le pause/riprese di ExoPlayer
-  (vedi `readAhead` in [`stream.go`](../tgengine/stream.go)).
+- **ExoPlayer restart:** after a rebuffer it resumes with ~1.5 s of buffer (a
+  deliberate choice, for fast restart). The large buffer is obtained by choosing
+  a high tier or DYNAMIC.
+- **Proxy prefetch:** independent of the player buffer, the Go proxy keeps
+  ~64 MiB of "warm" pre-downloaded video to absorb ExoPlayer's pause/resume
+  cycles (see `readAhead` in [`stream.go`](../tgengine/stream.go)).
 
 ---
-_Ultimo aggiornamento: 2026-06-23._
+_Last updated: 2026-06-25._

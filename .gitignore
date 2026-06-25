@@ -38,3 +38,6 @@ logapp*.txt
 # ─── macOS ───
 .DS_Store
 **/.DS_Store
+
+# ─── Local-only notes / backlog (never committed) ───
+*.local.md
