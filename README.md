@@ -5,11 +5,11 @@ Android — no full download first, no re-upload, no quality loss.
 
 ## What it does
 
-You log in with your **own** Telegram credentials (api_id/api_hash from
-my.telegram.org). The app then plays a file from a channel by downloading it in
-parallel chunks over MTProto and serving it to a local player through a
-localhost HTTP proxy — so large buffers stay in native memory and never cross
-the JNI boundary.
+You log in with Telegram api_id/api_hash — either the app's built-in defaults or
+**your own** (from my.telegram.org; entered in Settings, they take priority). The
+app then plays a file from a channel by downloading it in parallel chunks over
+MTProto and serving it to a local player through a localhost HTTP proxy — so
+large buffers stay in native memory and never cross the JNI boundary.
 
 - **Direct playback** of channel media on a TV box or phone.
 - **Launchable from any app** via a link following the pattern
@@ -21,8 +21,9 @@ the JNI boundary.
   order** and serves one continuous stream.
 - **Two player engines**: ExoPlayer/Media3 (default, hardware decode, great
   HDR/Dolby Vision) and libVLC (for containers ExoPlayer can't handle).
-- **Tunable buffering** (LOW/MID/HIGH/VHIGH + a DYNAMIC ramp) and a configurable
-  number of parallel connections.
+- **Tunable buffering** (LOW/MID/HIGH/VHIGH + a DYNAMIC ramp) and a **maximum**
+  number of parallel connections that the engine auto-scales by file size
+  (small file → 1, large file → up to the max).
 - **In-app updater** that pulls new builds from this repo's Releases.
 
 Under the hood it uses the [gotd](https://github.com/gotd/td) MTProto client,

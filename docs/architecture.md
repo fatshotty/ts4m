@@ -15,10 +15,10 @@ buffering, login, update).
 ## What it does
 
 Streams video files hosted on Telegram channels **directly**, without
-downloading the whole file first. The user logs in with their own Telegram
-credentials (api_id/api_hash from my.telegram.org); the app downloads the file
-in chunks over MTProto and serves it to a local player through a localhost HTTP
-proxy. Typical use: TV box / phone.
+downloading the whole file first. Login uses Telegram api_id/api_hash — either
+the app's built-in defaults or the user's own (from my.telegram.org); the app
+downloads the file in chunks over MTProto and serves it to a local player
+through a localhost HTTP proxy. Typical use: TV box / phone.
 
 The app is launched with a link following the pattern
 `/{channel_id}/{ordered-parts-dashed}` — the channel ID followed by the file's
@@ -32,7 +32,7 @@ continuous stream**.
 | Part | Where | Role |
 |---|---|---|
 | **Android app (Kotlin)** | [app/src/main/java/net/fatshotty/tgstream/](../app/src/main/java/net/fatshotty/tgstream/) | UI, settings, players, updater |
-| **Go engine (`tgengine`)** | [tgengine/](../tgengine/) | MTProto client, streaming pipeline, HTTP proxy, disk cache |
+| **Go engine (`tgengine`)** | [tgengine/](../tgengine/) | MTProto client, streaming pipeline, HTTP proxy |
 
 They talk via **gomobile**: the Go engine is compiled into an AAR
 (`app/libs/tgengine.aar`, built with [tgengine/build-aar.sh](../tgengine/build-aar.sh))
@@ -98,7 +98,11 @@ Two engines, selected in Settings:
   with debounced seek commit, hardware decoder (great HDR/Dolby Vision).
 - **libVLC** — [player/PlayerActivity.kt](../app/src/main/java/net/fatshotty/tgstream/player/PlayerActivity.kt).
   For containers ExoPlayer can't handle (e.g. large OpenDML AVI); native-memory
-  cache; "force SW decode" option for problematic HDR/Dolby Vision.
+  cache; hardware decode on real devices.
+
+On exit both players return an **MX Player-style result intent** (`end_by` +
+`position`/`duration` in ms) so an external launcher (e.g. Stremio/Nuvio) can
+update its Continue Watching; an inbound MX `position` extra is honored to resume.
 
 **Buffering** ([util/BufferTuning.kt](../app/src/main/java/net/fatshotty/tgstream/util/BufferTuning.kt)):
 LOW/MID/HIGH/VHIGH tiers (ExoPlayer fixes **MB**, libVLC fixes **seconds**), plus
@@ -110,15 +114,20 @@ Details and tables in [buffer-tuning.md](buffer-tuning.md).
 
 ## Settings ([data/Settings.kt](../app/src/main/java/net/fatshotty/tgstream/data/Settings.kt), [ui/SettingsActivity.kt](../app/src/main/java/net/fatshotty/tgstream/ui/SettingsActivity.kt))
 
-- **Connections per stream** (1–16, default 3)
+- **Max connections per stream** (1–16, default 3) — a ceiling; the engine
+  auto-scales the actual count by file size (~1 connection per 20 GiB)
 - **Player engine**: ExoPlayer / libVLC
 - **Buffer tier**: LOW/MID/HIGH/VHIGH or DYNAMIC
-- **Force SW decode** (libVLC only)
-- **Disk cache**: on/off (default off)
-- **Pre-buffer**: 0 = AUTO (bitrate-scaled) or fixed 5/10/15/20/30 s
+- **Pre-buffer**: 0 = AUTO (bitrate-scaled) or fixed 2/5/10/15/20/30 s
+- **Telegram credentials** (advanced): leave empty to use the app's built-in
+  defaults, or enter your own (which take priority)
 
-Stored in SharedPreferences in cleartext (they're the user's own credentials,
-never leave the device; no Keystore, for compatibility with odd devices).
+User-entered credentials are stored in SharedPreferences in cleartext (they're
+the user's own, never leave the device; no Keystore, for compatibility with odd
+devices). The app's built-in defaults instead live XOR-obfuscated inside the Go
+engine and are injected at build time via `-ldflags` (see
+[tgengine/credentials.go](../tgengine/credentials.go)), so no plaintext ships in
+git or in the APK's Java/DEX.
 
 ---
 
