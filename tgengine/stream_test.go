@@ -42,6 +42,34 @@ func TestWarmPoolSkipsSingleConnection(t *testing.T) {
 	}
 }
 
+func TestPickConns(t *testing.T) {
+	const gib = int64(1) << 30
+	cases := []struct {
+		name  string
+		sizeG int64 // file size in GiB
+		max   int
+		want  int
+	}{
+		{"tiny file uses one", 4, 5, 1},
+		{"just under one step", 19, 5, 1},
+		{"exactly one step uses one", 20, 5, 1},
+		{"just over one step uses two", 21, 5, 2},
+		{"40 GiB uses two", 40, 5, 2},
+		{"60 GiB uses three", 60, 5, 3},
+		{"80 GiB uses four", 80, 5, 4},
+		{"capped at user max", 200, 3, 3},
+		{"max below one is floored to one", 5, 0, 1},
+		{"zero size still uses one", 0, 5, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := pickConns(c.sizeG*gib, c.max); got != c.want {
+				t.Fatalf("pickConns(%d GiB, max=%d) = %d, want %d", c.sizeG, c.max, got, c.want)
+			}
+		})
+	}
+}
+
 func TestPoolNeedsResize(t *testing.T) {
 	cases := []struct {
 		name        string

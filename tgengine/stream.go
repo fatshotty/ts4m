@@ -5,7 +5,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -22,13 +21,6 @@ import (
 const (
 	chunkSize   = 1024 * 1024 // 1 MiB download chunk (aligned to GetFile boundaries)
 	maxPoolSize = 16          // upper bound of connections per DC pool
-
-	// tailProbeWindow is how close to EOF a concurrent range request must start to
-	// be treated as a player's container-index probe (e.g. MKV Cues) rather than a
-	// reopened main read. Index probes are served directly without disturbing the
-	// disk-cache ring; a mid-stream concurrent read instead means the main reader
-	// moved and the ring's owner is now orphaned.
-	tailProbeWindow = 16 << 20 // 16 MiB
 
 	// buildTag is stamped on every stream request so the log unambiguously
 	// identifies the running engine build. Bump it on every engine change.
@@ -117,16 +109,19 @@ func (p *proxyServer) handleStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad messages", http.StatusBadRequest)
 		return
 	}
-	conns := atoiDefault(q.Get("conns"), 1)
-	if conns < 1 {
-		conns = 1
+	// The conns query param is the user's MAXIMUM. The actual number of
+	// connections is picked from the file size below (pickConns), so a small file
+	// never opens more than it needs and only a big one scales up to this cap.
+	maxConns := atoiDefault(q.Get("conns"), 1)
+	if maxConns < 1 {
+		maxConns = 1
 	}
-	if conns > maxPoolSize {
-		conns = maxPoolSize
+	if maxConns > maxPoolSize {
+		maxConns = maxPoolSize
 	}
 
-	logI("stream req [build=%s]: channel=%d msgs=%v conns=%d range=%q method=%s",
-		buildTag, channelID, msgIDs, conns, r.Header.Get("Range"), r.Method)
+	logI("stream req [build=%s]: channel=%d msgs=%v maxConns=%d range=%q method=%s",
+		buildTag, channelID, msgIDs, maxConns, r.Header.Get("Range"), r.Method)
 
 	ctx := r.Context()
 	input, err := e.resolveChannel(ctx, channelID)
@@ -151,6 +146,13 @@ func (p *proxyServer) handleStream(w http.ResponseWriter, r *http.Request) {
 		total += doc.Size
 	}
 	logI("resolved %d part(s), total=%d bytes", len(parts), total)
+
+	// Scale connections to the file size (the only metadata we reliably have):
+	// ~1 connection per connSizeStep, capped at the user's max. Small files stream
+	// fine on a single connection; only large ones ramp up.
+	conns := pickConns(total, maxConns)
+	logI("conns: size=%.1f GiB -> %d (max=%d)", float64(total)/float64(1<<30), conns, maxConns)
+
 	contentType := parts[0].doc.MimeType
 	if contentType == "" {
 		contentType = "application/octet-stream"
@@ -178,47 +180,6 @@ func (p *proxyServer) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logI("serving bytes %d-%d (%d bytes) range=%v", start, end, end-start+1, isRange)
-
-	// Optional disk cache: route through the per-stream write-ahead ring so a
-	// continuous downloader keeps the pipe hot and the look-ahead lives off-heap.
-	if q.Get("cache") == "1" {
-		var durationSec float64
-		for i := range parts {
-			durationSec += durationOf(parts[i].doc)
-		}
-		key := fmt.Sprintf("%d|%s|%d", channelID, q.Get("messages"), conns)
-		ring, rerr := e.getRing(key, channelID, input, parts, total, durationSec, conns)
-		if rerr != nil {
-			logW("diskcache: init failed (%v); serving direct", rerr)
-		} else if ring != nil {
-			err := ring.serve(ctx, w, start, end)
-			if errors.Is(err, errRingBusy) {
-				// The ring already has an owner. Two cases:
-				if start >= total-tailProbeWindow {
-					// (a) A small probe near EOF (MKV Cues/index) while the main
-					// reader owns the ring: serve it directly and leave the ring
-					// intact for the main reader.
-					logI("diskcache: ring busy (tail probe), serving bytes %d-%d direct", start, end)
-				} else {
-					// (b) A concurrent mid-stream read: the player reopened its
-					// main connection at a new offset and abandoned the one that
-					// owns the ring (ExoPlayer does this WITHOUT closing the old
-					// socket, so the old serve() stays blocked on Write and keeps
-					// owning the ring). The orphaned producer would keep competing
-					// for the media pool and starve this real reader, so drop the
-					// cache and serve everything directly from here on.
-					logW("diskcache: ring busy at offset %d (player reopened mid-stream); dropping cache, serving direct", start)
-					go e.clearRing()
-				}
-				// fall through to streamRange
-			} else {
-				if err != nil {
-					logW("stream ended (cached): %v", err)
-				}
-				return
-			}
-		}
-	}
 
 	if err := e.streamRange(ctx, w, channelID, input, parts, start, end, conns); err != nil {
 		// Client disconnects are normal; just stop.
@@ -532,6 +493,30 @@ func warmPool(ctx context.Context, conns int, open func(context.Context) error) 
 		}()
 	}
 	wg.Wait()
+}
+
+// connSizeStep is the file size that warrants one download connection. A single
+// connection comfortably sustains far more than the bitrate of a 20 GiB film, so
+// scaling one connection per 20 GiB keeps small files on a single connection and
+// only ramps big ones up. Tuned approximately, erring toward fewer connections.
+const connSizeStep int64 = 20 << 30 // 20 GiB
+
+// pickConns chooses the number of download connections for a file of `total`
+// bytes: ceil(total / connSizeStep), clamped to [1, max]. Size is the only
+// metadata we reliably have (duration is usually absent), so this is a coarse
+// but predictable proxy: small file → 1 connection, big file → up to the cap.
+func pickConns(total int64, max int) int {
+	if max < 1 {
+		max = 1
+	}
+	n := int((total + connSizeStep - 1) / connSizeStep) // ceil
+	if n < 1 {
+		n = 1
+	}
+	if n > max {
+		n = max
+	}
+	return n
 }
 
 // poolNeedsResize reports whether a cached media pool created with existingMax

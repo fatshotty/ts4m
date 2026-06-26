@@ -5,6 +5,9 @@
 **/*-session.json
 *.env
 .env
+# Built-in API credentials baked into the engine at build time (plaintext).
+credentials.local
+**/credentials.local
 
 # ─── Android / Gradle build output ───
 .gradle/
