@@ -1,5 +1,6 @@
 package net.fatshotty.tgstream.player
 
+import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
@@ -107,7 +108,7 @@ class PlayerActivityExo : AppCompatActivity() {
         title = intent.getStringExtra(PlayerActivity.EXTRA_TITLE) ?: ""
         // Prebuilt by PlayerEntryActivity: local proxy URL, or a remote phone's.
         val streamUrl = intent.getStringExtra(PlayerActivity.EXTRA_STREAM_URL)
-            ?: Tg.streamUrl(channel, messages, conns, Settings.getDiskCache(this))
+            ?: Tg.streamUrl(channel, messages, conns)
         val remote = Settings.isRemoteClient(this)
 
         // In local mode the on-device proxy must be up; in remote mode we stream
@@ -215,13 +216,6 @@ class PlayerActivityExo : AppCompatActivity() {
         // first; on light streams the time cap lets it buffer far ahead. In
         // "dynamic" mode the cap ramps LOW→HIGH→VHIGH over the first 20s of play.
         val bufferMode = Settings.getBufferMode(this)
-        val diskCache = Settings.getDiskCache(this)
-        // The buffer mode is independent of the disk cache. The disk cache is a Go
-        // proxy feature (off-heap look-ahead); ExoPlayer's RAM buffer always follows
-        // the user's chosen mode. Previously disk-cache ON forced a fixed LOW buffer
-        // and IGNORED "dynamic", which (a) defeated the per-film adaptation and (b)
-        // deadlocked at high bitrate (see minBufferMs note below).
-        //
         // CRITICAL: minBufferMs must stay below what targetBufferBytes can hold at the
         // stream's bitrate. With prioritizeTimeOverSizeThresholds=false the byte cap
         // stops loading first; if it is reached before minBufferMs worth of media is
@@ -244,7 +238,7 @@ class PlayerActivityExo : AppCompatActivity() {
                 .setPrioritizeTimeOverSizeThresholds(false)
                 .build()
         }
-        AppLog.i(TAG, "buffer mode: $bufferMode disk-cache: $diskCache")
+        AppLog.i(TAG, "buffer mode: $bufferMode")
 
         val exo = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
@@ -281,7 +275,10 @@ class PlayerActivityExo : AppCompatActivity() {
                     startReported = true
                     reportStart(exo.currentPosition)
                 }
-                if (state == Player.STATE_ENDED) reportStopped(exo.currentPosition)
+                if (state == Player.STATE_ENDED) {
+                    playbackCompleted = true
+                    reportStopped(exo.currentPosition)
+                }
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 reportProgress(exo.currentPosition, !isPlaying)
@@ -573,12 +570,36 @@ class PlayerActivityExo : AppCompatActivity() {
         if (r != null) Thread { runCatching { r.stopped(pos) } }.start()
     }
 
+    @Volatile private var playbackCompleted = false
+    private var resultRelayed = false
+
+    /**
+     * Relay an MX-style result to whoever launched us (via PlayerEntryActivity) so
+     * it can persist the resume position. Harmless when started without a result.
+     */
+    override fun finish() {
+        if (!resultRelayed) {
+            resultRelayed = true
+            val data = Intent()
+            if (playbackCompleted) {
+                data.putExtra(PlayerActivity.MX_END_BY, "playback_completion")
+            } else {
+                val pos = player?.currentPosition ?: 0L
+                val dur = (player?.duration ?: 0L).let { if (it > 0) it else durationMs }
+                data.putExtra(PlayerActivity.MX_END_BY, "user")
+                data.putExtra(PlayerActivity.MX_POSITION, pos.toInt())
+                if (dur > 0) data.putExtra(PlayerActivity.MX_DURATION, dur.toInt())
+            }
+            setResult(RESULT_OK, data)
+        }
+        super.finish()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         scrubHandler.removeCallbacks(commitScrubRunnable)
         playerView?.player = null
         player?.release()
         player = null
-        Tg.clearStreamCache()
     }
 }

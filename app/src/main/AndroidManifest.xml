@@ -60,8 +60,7 @@
         <activity
             android:name=".ui.PlayerEntryActivity"
             android:exported="true"
-            android:noHistory="true"
-            android:theme="@style/Theme.TgStream">
+            android:theme="@style/Theme.TgStream.Invisible">
             <intent-filter android:priority="50">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

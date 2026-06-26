@@ -1,11 +1,18 @@
 package net.fatshotty.tgstream.data
 
 import android.content.Context
+import tgengine.Tgengine
 
 /**
  * Simple persistent settings. For this test we keep it plain (no encryption) to
  * avoid Keystore-related crashes on odd devices/boxes; the api credentials are
  * the user's own and never leave the device.
+ *
+ * API credentials: we only ever store/return what the user typed (empty if none).
+ * The fallback to the app's built-in defaults happens inside the Go engine's
+ * newEngine (the obfuscated defaults never cross JNI). Kotlin only needs to know
+ * IF a built-in default exists, to decide whether to show the credentials form —
+ * that single boolean is [Tgengine.hasDefaultCredentials].
  */
 object Settings {
     private const val PREFS = "tgstream"
@@ -15,8 +22,6 @@ object Settings {
     private const val KEY_LAST_URL = "last_url"
     private const val KEY_ENGINE = "player_engine"
     private const val KEY_BUFFER = "buffer_mode"
-    private const val KEY_SW_DECODE = "force_sw_decode"
-    private const val KEY_DISK_CACHE = "disk_cache"
     private const val KEY_PREBUFFER = "prebuffer_seconds"
     private const val KEY_SERVER_ENABLED = "server_enabled" // phone acts as LAN proxy
     private const val KEY_LAN_TOKEN = "lan_token"           // token for LAN clients
@@ -28,7 +33,7 @@ object Settings {
     // bigger value buys a longer smooth run on marginal devices at the cost of a
     // longer wait at start/after seek.
     const val PREBUFFER_AUTO = 0
-    val PREBUFFER_CHOICES = listOf(PREBUFFER_AUTO, 5, 10, 15, 20, 30)
+    val PREBUFFER_CHOICES = listOf(PREBUFFER_AUTO, 2, 5, 10, 15, 20, 30)
 
     const val ENGINE_EXO = "exo"
     const val ENGINE_VLC = "vlc"
@@ -85,28 +90,6 @@ object Settings {
         prefs(ctx).edit().putString(KEY_BUFFER, mode).apply()
     }
 
-    /**
-     * Force software video decoding on libVLC (default false = hardware). Useful to
-     * test Dolby Vision / HDR 10-bit content, where the HW decoder can produce a
-     * green screen; SW decode renders correct colours but is much heavier on CPU.
-     * No effect on ExoPlayer (always uses the platform decoder).
-     */
-    fun getForceSwDecode(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_SW_DECODE, false)
-    fun setForceSwDecode(ctx: Context, on: Boolean) {
-        prefs(ctx).edit().putBoolean(KEY_SW_DECODE, on).apply()
-    }
-
-    /**
-     * On-disk write-ahead cache (default off). When on, the Go proxy keeps a
-     * small circular file (50–250 MB, sized by bitrate) filled ahead of playback
-     * to absorb jitter on high-bitrate streams, off the Java heap. Deleted on
-     * stop. Applies to both engines (it lives in the proxy).
-     */
-    fun getDiskCache(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_DISK_CACHE, false)
-    fun setDiskCache(ctx: Context, on: Boolean) {
-        prefs(ctx).edit().putBoolean(KEY_DISK_CACHE, on).apply()
-    }
-
     /** Pre-buffer seconds: 0 = AUTO (bitrate-scaled), else a fixed value. */
     fun getPreBufferSeconds(ctx: Context): Int = prefs(ctx).getInt(KEY_PREBUFFER, PREBUFFER_AUTO)
     fun setPreBufferSeconds(ctx: Context, s: Int) {
@@ -146,8 +129,14 @@ object Settings {
     /** True when this device should stream from a remote phone instead of its own engine. */
     fun isRemoteClient(ctx: Context): Boolean = getRemoteHost(ctx).isNotBlank()
 
+    // Configured when the user entered their own credentials, OR the build baked
+    // in a default (the engine will use it). runCatching guards the JNI call so a
+    // missing/odd native lib degrades to "no default" instead of crashing.
     fun isConfigured(ctx: Context): Boolean =
-        getApiId(ctx) > 0 && getApiHash(ctx).isNotBlank()
+        (getApiId(ctx) > 0 && getApiHash(ctx).isNotBlank()) || hasDefaultCredentials()
+
+    private fun hasDefaultCredentials(): Boolean =
+        runCatching { Tgengine.hasDefaultCredentials() }.getOrDefault(false)
 
     fun clear(ctx: Context) {
         prefs(ctx).edit().clear().apply()

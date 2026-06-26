@@ -1,5 +1,6 @@
 package net.fatshotty.tgstream.player
 
+import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
@@ -58,6 +59,14 @@ class PlayerActivity : AppCompatActivity() {
         const val EXTRA_PLAY_SESSION = "play_session"
         const val EXTRA_DEVICE_ID = "device_id"
         const val EXTRA_MEDIA_SOURCE = "media_source"
+
+        // MX Player result-intent keys — the de-facto Android external-player
+        // protocol that Stremio/Nuvio read on return to update Continue Watching.
+        // On exit we set RESULT_OK with end_by="playback_completion" (watched to the
+        // end) or end_by="user" + position/duration (ms) so the launcher can resume.
+        const val MX_POSITION = "position"
+        const val MX_DURATION = "duration"
+        const val MX_END_BY = "end_by"
     }
 
     private var libVlc: LibVLC? = null
@@ -130,10 +139,9 @@ class PlayerActivity : AppCompatActivity() {
 
         buildUi()
 
-        val diskCache = net.fatshotty.tgstream.data.Settings.getDiskCache(this)
         val url = intent.getStringExtra(EXTRA_STREAM_URL)
-            ?: Tg.streamUrl(channel, messages, conns, diskCache)
-        AppLog.i(TAG, "stream url: $url (remote=$remote, engineReady=${Tg.isReady}, diskCache=$diskCache)")
+            ?: Tg.streamUrl(channel, messages, conns)
+        AppLog.i(TAG, "stream url: $url (remote=$remote, engineReady=${Tg.isReady})")
 
         // libVLC's network cache is fixed at media init and cannot be resized at
         // runtime, so "dynamic" can't ramp here — it falls back to a fixed tier.
@@ -150,17 +158,14 @@ class PlayerActivity : AppCompatActivity() {
         val media = Media(vlc, Uri.parse(url))
         // HW decode on real devices; the Android emulator's MediaCodec deadlocks
         // ("buffer deadlock prevented") freezing the video, so use SW there.
-        // The user can also force SW decode (Settings) to test Dolby Vision / HDR
-        // 10-bit, where the HW decoder may show a green screen.
         val isEmulator = Build.FINGERPRINT.contains("generic") ||
             Build.FINGERPRINT.contains("emulator") ||
             Build.MODEL.contains("sdk_gphone") ||
             Build.HARDWARE.contains("goldfish") || Build.HARDWARE.contains("ranchu") ||
             Build.PRODUCT.contains("sdk")
-        val forceSw = net.fatshotty.tgstream.data.Settings.getForceSwDecode(this)
-        val useHw = !isEmulator && !forceSw
+        val useHw = !isEmulator
         media.setHWDecoderEnabled(useHw, false)
-        AppLog.i(TAG, "HW decode=$useHw (emulator=$isEmulator, forceSw=$forceSw)")
+        AppLog.i(TAG, "HW decode=$useHw (emulator=$isEmulator)")
         media.addOption(":network-caching=$cachingMs")
         mp.media = media
         media.release()
@@ -286,6 +291,7 @@ class PlayerActivity : AppCompatActivity() {
                 reportProgress(mediaPlayer?.time ?: 0, true, "Pause")
             MediaPlayer.Event.EndReached -> {
                 reportStopped(mediaPlayer?.time ?: 0)
+                playbackCompleted = true
                 runOnUiThread { finish() }
             }
             MediaPlayer.Event.EncounteredError -> {
@@ -415,7 +421,6 @@ class PlayerActivity : AppCompatActivity() {
         }
         sb.append("Buffering: ").append(bufferingPct.toInt()).append("%\n")
         sb.append("Modalità buffer: ").append(net.fatshotty.tgstream.data.Settings.getBufferMode(this)).append('\n')
-        sb.append("Decodifica: ").append(if (net.fatshotty.tgstream.data.Settings.getForceSwDecode(this)) "SW (forzata)" else "HW").append('\n')
         sb.append("Connessioni parallele: ").append(conns).append('\n')
         sb.append("Posizione: ").append(fmtTime(mp.time)).append(" / ").append(fmtTime(durationMs))
         statsView?.text = sb
@@ -572,6 +577,29 @@ class PlayerActivity : AppCompatActivity() {
         if (r != null) Thread { runCatching { r.stopped(pos) } }.start()
     }
 
+    @Volatile private var playbackCompleted = false
+    private var resultRelayed = false
+
+    /**
+     * Relay an MX-style result to whoever launched us (via PlayerEntryActivity) so
+     * it can persist the resume position. Harmless when started without a result.
+     */
+    override fun finish() {
+        if (!resultRelayed) {
+            resultRelayed = true
+            val data = Intent()
+            if (playbackCompleted) {
+                data.putExtra(MX_END_BY, "playback_completion")
+            } else {
+                data.putExtra(MX_END_BY, "user")
+                data.putExtra(MX_POSITION, (mediaPlayer?.time ?: 0L).toInt())
+                if (durationMs > 0) data.putExtra(MX_DURATION, durationMs.toInt())
+            }
+            setResult(RESULT_OK, data)
+        }
+        super.finish()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         scrubHandler.removeCallbacks(commitScrubRunnable)
@@ -583,6 +611,5 @@ class PlayerActivity : AppCompatActivity() {
         mediaPlayer = null
         runCatching { libVlc?.release() }
         libVlc = null
-        Tg.clearStreamCache()
     }
 }

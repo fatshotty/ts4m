@@ -75,9 +75,6 @@ object Tg {
             sessionFile,
         )
         e.setLoginListener(listener)
-        // Enable the optional on-disk stream cache rooted in the app cache dir.
-        // The Go side wipes leftovers on set, so a crash never saturates storage.
-        runCatching { e.setCacheDir(ctx.applicationContext.cacheDir.absolutePath) }
         // If this device is a LAN "server", enable token-gated remote access so a
         // paired box can stream from it even without opening the Server screen.
         if (Settings.getServerEnabled(ctx)) {
@@ -120,14 +117,12 @@ object Tg {
     fun submitPassword(v: String) = scope.launch { runCatching { engine?.submitPassword(v) } }
 
     /** Builds the localhost proxy URL for a stream. */
-    fun streamUrl(channelId: Long, messagesDash: String, conns: Int, cache: Boolean = false): String =
-        "http://127.0.0.1:$proxyPort/stream?channel=$channelId&messages=$messagesDash&conns=$conns" +
-            if (cache) "&cache=1" else ""
+    fun streamUrl(channelId: Long, messagesDash: String, conns: Int): String =
+        "http://127.0.0.1:$proxyPort/stream?channel=$channelId&messages=$messagesDash&conns=$conns"
 
     /**
      * Builds a stream URL pointing at a remote phone's proxy (box "client mode").
-     * host is "ip:port"; token authorizes the LAN request. No disk cache (the phone
-     * is the workhorse and serves direct).
+     * host is "ip:port"; token authorizes the LAN request.
      */
     fun remoteStreamUrl(host: String, token: String, channelId: Long, messagesDash: String, conns: Int): String =
         "http://$host/stream?channel=$channelId&messages=$messagesDash&conns=$conns&name=video.mkv" +
@@ -136,11 +131,6 @@ object Tg {
     /** Enables/disables LAN ("server") access to this device's proxy. */
     fun setLanToken(token: String) {
         scope.launch { runCatching { engine?.setLanToken(token) } }
-    }
-
-    /** Stops and deletes the active on-disk stream cache (call when playback ends). */
-    fun clearStreamCache() {
-        scope.launch { runCatching { engine?.clearStreamCache() } }
     }
 
     /**

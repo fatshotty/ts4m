@@ -21,8 +21,14 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         root.addView(TextView(this).apply {
-            text = "Connessioni simultanee per stream (1-16)"
+            text = "Connessioni max per stream (1-16)"
             textSize = 16f
+            setPadding(0, 0, 0, 4)
+        })
+        root.addView(TextView(this).apply {
+            text = "Tetto massimo. L'app ne usa meno per i file piccoli e scala " +
+                "fino a questo valore solo per i file grandi (~1 ogni 20 GB)."
+            textSize = 12f
             setPadding(0, 0, 0, 16)
         })
         val connField = EditText(this).apply {
@@ -81,45 +87,6 @@ class SettingsActivity : AppCompatActivity() {
         root.addView(bufferBtn)
 
         root.addView(TextView(this).apply {
-            text = "Decodifica video (solo VLC)"
-            textSize = 16f
-            setPadding(0, 40, 0, 8)
-        })
-        // Forces software decoding on libVLC. Use to test Dolby Vision / HDR 10-bit
-        // content where the HW decoder shows a green screen. Heavier on CPU.
-        var forceSw = Settings.getForceSwDecode(this)
-        val swBtn = Button(this).apply { isFocusable = true }
-        fun renderSw() {
-            swBtn.text = if (forceSw)
-                "Decodifica SW Dolby Vision: ON — tocca per HW"
-            else
-                "Decodifica SW Dolby Vision: OFF (HW) — tocca per SW"
-        }
-        renderSw()
-        swBtn.setOnClickListener { forceSw = !forceSw; renderSw() }
-        root.addView(swBtn)
-
-        root.addView(TextView(this).apply {
-            text = "Cache su disco (streaming ad alto bitrate)"
-            textSize = 16f
-            setPadding(0, 40, 0, 8)
-        })
-        // Optional disk write-ahead cache in the Go proxy: a small circular file
-        // (50–250 MB, sized by bitrate, deleted on stop) filled ahead of playback
-        // to absorb jitter on heavy ~80 Mb/s streams, off the Java heap.
-        var diskCache = Settings.getDiskCache(this)
-        val cacheBtn = Button(this).apply { isFocusable = true }
-        fun renderCache() {
-            cacheBtn.text = if (diskCache)
-                "Cache su disco: ON — tocca per disattivare"
-            else
-                "Cache su disco: OFF — tocca per attivare"
-        }
-        renderCache()
-        cacheBtn.setOnClickListener { diskCache = !diskCache; renderCache() }
-        root.addView(cacheBtn)
-
-        root.addView(TextView(this).apply {
             text = "Pre-buffer avvio/seek (solo buffer dinamico)"
             textSize = 16f
             setPadding(0, 40, 0, 8)
@@ -164,17 +131,55 @@ class SettingsActivity : AppCompatActivity() {
         }
         root.addView(remoteTokenField)
 
+        root.addView(TextView(this).apply {
+            text = "Credenziali Telegram (avanzato)"
+            textSize = 16f
+            setPadding(0, 40, 0, 4)
+        })
+        root.addView(TextView(this).apply {
+            text = "Le tue api_id/api_hash da my.telegram.org. Lascia vuoto per usare " +
+                "quelle predefinite dell'app. Dopo la modifica, riavvia l'app."
+            textSize = 12f
+            setPadding(0, 0, 0, 8)
+        })
+        val apiIdField = EditText(this).apply {
+            hint = "api_id"
+            inputType = InputType.TYPE_CLASS_NUMBER
+            isSingleLine = true
+            val cur = Settings.getApiId(this@SettingsActivity)
+            if (cur > 0) setText(cur.toString())
+        }
+        root.addView(apiIdField)
+        val apiHashField = EditText(this).apply {
+            hint = "api_hash"
+            isSingleLine = true
+            setText(Settings.getApiHash(this@SettingsActivity))
+        }
+        root.addView(apiHashField)
+
         val save = Button(this).apply {
             text = "Salva"
             isFocusable = true
             setPadding(0, 0, 0, 0)
             setOnClickListener {
+                // Credentials override: both empty → clear (use the app default);
+                // both valid → store the user's own; anything else → warn and stop.
+                val idStr = apiIdField.text.toString().trim()
+                val hashStr = apiHashField.text.toString().trim()
+                if (idStr.isEmpty() && hashStr.isEmpty()) {
+                    Settings.setApiCredentials(this@SettingsActivity, 0, "")
+                } else {
+                    val id = idStr.toIntOrNull()
+                    if (id == null || id <= 0 || hashStr.isEmpty()) {
+                        Toast.makeText(this@SettingsActivity, "api_id/api_hash non validi", Toast.LENGTH_LONG).show()
+                        return@setOnClickListener
+                    }
+                    Settings.setApiCredentials(this@SettingsActivity, id, hashStr)
+                }
                 val n = connField.text.toString().trim().toIntOrNull() ?: 3
                 Settings.setConnections(this@SettingsActivity, n)
                 Settings.setPlayerEngine(this@SettingsActivity, engine)
                 Settings.setBufferMode(this@SettingsActivity, buffer)
-                Settings.setForceSwDecode(this@SettingsActivity, forceSw)
-                Settings.setDiskCache(this@SettingsActivity, diskCache)
                 Settings.setPreBufferSeconds(this@SettingsActivity, prebuffer)
                 Settings.setRemoteHost(this@SettingsActivity, remoteHostField.text.toString())
                 Settings.setRemoteToken(this@SettingsActivity, remoteTokenField.text.toString())
@@ -185,9 +190,9 @@ class SettingsActivity : AppCompatActivity() {
         root.addView(TextView(this).apply { setPadding(0, 24, 0, 0) }) // spacer
         root.addView(save)
 
-        // Wrap in a ScrollView: with the disk-cache row added, the content is
-        // taller than the screen on smaller devices and the Salva button fell
-        // off-screen. isFillViewport keeps the layout filling short screens.
+        // Wrap in a ScrollView: the content is taller than the screen on smaller
+        // devices and the Salva button fell off-screen. isFillViewport keeps the
+        // layout filling short screens.
         val scroll = ScrollView(this).apply {
             isFillViewport = true
             addView(root)
