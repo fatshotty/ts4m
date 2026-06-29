@@ -42,24 +42,24 @@ class SpeedTestActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 48, 48, 48)
         }
-        root.addView(TextView(this).apply { text = "Test velocità download"; textSize = 22f })
+        root.addView(TextView(this).apply { text = "Download speed test"; textSize = 22f })
         root.addView(TextView(this).apply {
-            text = "Scarica dal proxy a massima velocità (senza player) e misura i MB/s reali."
+            text = "Downloads from the proxy at maximum speed (without the player) and measures real MB/s."
             textSize = 13f; setPadding(0, 12, 0, 12)
         })
         urlField = EditText(this).apply {
-            hint = "URL Emby (es. http://server/emby/videos/8/stream.mkv?api_key=...)"
+            hint = "Emby URL (for example, http://server/emby/videos/8/stream.mkv?api_key=...)"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             setText(Settings.getLastUrl(this@SpeedTestActivity))
             textSize = 12f
         }
         root.addView(urlField)
         root.addView(TextView(this).apply {
-            text = "Connessioni: ${Settings.getConnections(this@SpeedTestActivity)} (modificale in Impostazioni)"
+            text = "Connections: ${Settings.getConnections(this@SpeedTestActivity)} (change them in Settings)"
             textSize = 13f; setPadding(0, 12, 0, 12)
         })
         startBtn = Button(this).apply {
-            text = "Avvia test"
+            text = "Start test"
             isFocusable = true
             setOnClickListener { if (running.get()) stop() else start() }
         }
@@ -77,7 +77,7 @@ class SpeedTestActivity : AppCompatActivity() {
 
     private fun start() {
         val urlStr = urlField.text.toString().trim()
-        if (urlStr.isBlank()) { out.text = "Inserisci un URL Emby"; return }
+        if (urlStr.isBlank()) { out.text = "Enter an Emby URL"; return }
         running.set(true)
         startBtn.text = "Stop"
         Tg.start(this)
@@ -87,30 +87,29 @@ class SpeedTestActivity : AppCompatActivity() {
     private fun stop() {
         running.set(false)
         call?.cancel()
-        startBtn.text = "Avvia test"
+        startBtn.text = "Start test"
     }
 
     private suspend fun runTest(urlStr: String) {
         try {
-            setOut("Attendo l'engine Telegram…")
-            if (!Tg.awaitReady()) { setOut("Telegram non pronto/loggato"); return }
+            setOut("Waiting for the Telegram engine...")
+            if (!Tg.awaitReady()) { setOut("Telegram is not ready/logged in"); return }
             val conns = Settings.getConnections(this)
             val (channel, messages) = withContext(Dispatchers.IO) {
                 val uri = Uri.parse(urlStr)
                 val provider = ProviderRegistry.candidates(uri).firstOrNull()
-                    ?: ProviderRegistry.single
-                    ?: throw IllegalStateException("nessun provider")
+                    ?: throw IllegalStateException("Unsupported URL")
                 val r = provider.resolve(uri)
                 r.stream.channelId to r.stream.messagesDash
             }
             val proxyUrl = Tg.streamUrl(channel, messages, conns)
-            setOut("Risolto. Scarico… (conns=$conns)")
+            setOut("Resolved. Downloading... (conns=$conns)")
             withContext(Dispatchers.IO) { drain(proxyUrl, conns) }
         } catch (t: Throwable) {
-            setOut("Errore: ${t.message}")
+            setOut("Error: ${t.message}")
         } finally {
             running.set(false)
-            runOnUiThread { startBtn.text = "Avvia test" }
+            runOnUiThread { startBtn.text = "Start test" }
         }
     }
 
@@ -128,9 +127,9 @@ class SpeedTestActivity : AppCompatActivity() {
         call = c
         c.execute().use { resp ->
             if (!resp.isSuccessful && resp.code != 206) {
-                setOut("HTTP ${resp.code} dal proxy"); return
+                setOut("HTTP ${resp.code} from proxy"); return
             }
-            val ins = resp.body?.byteStream() ?: run { setOut("nessun corpo risposta"); return }
+            val ins = resp.body?.byteStream() ?: run { setOut("empty response body"); return }
             val buf = ByteArray(256 * 1024)
             var total = 0L
             val t0 = System.nanoTime()
@@ -151,7 +150,7 @@ class SpeedTestActivity : AppCompatActivity() {
                 if (total >= cap) break
             }
             val now = System.nanoTime()
-            setOut(report(conns, 0.0, total, t0, now, peak) + "\n\n--- FINE ---")
+            setOut(report(conns, 0.0, total, t0, now, peak) + "\n\n--- END ---")
         }
     }
 
@@ -159,12 +158,12 @@ class SpeedTestActivity : AppCompatActivity() {
         val el = (now - t0) / 1e9
         val avg = if (el > 0) total / 1e6 / el else 0.0
         val sb = StringBuilder()
-        sb.append("Connessioni: ").append(conns).append('\n')
-        sb.append("Scaricato:   ").append(String.format("%.0f MB", total / 1e6))
+        sb.append("Connections: ").append(conns).append('\n')
+        sb.append("Downloaded:  ").append(String.format("%.0f MB", total / 1e6))
             .append(String.format(" in %.1fs", el)).append('\n')
-        sb.append("Media:       ").append(String.format("%.1f MB/s (%.0f Mbps)", avg, avg * 8)).append('\n')
+        sb.append("Average:     ").append(String.format("%.1f MB/s (%.0f Mbps)", avg, avg * 8)).append('\n')
         if (liveMBs > 0) sb.append("Live:        ").append(String.format("%.1f MB/s", liveMBs)).append('\n')
-        sb.append("Picco:       ").append(String.format("%.1f MB/s (%.0f Mbps)", peak, peak * 8))
+        sb.append("Peak:        ").append(String.format("%.1f MB/s (%.0f Mbps)", peak, peak * 8))
         return sb.toString()
     }
 

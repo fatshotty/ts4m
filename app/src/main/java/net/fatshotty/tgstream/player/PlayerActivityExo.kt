@@ -106,14 +106,11 @@ class PlayerActivityExo : AppCompatActivity() {
         startMs = intent.getLongExtra(PlayerActivity.EXTRA_START_MS, 0)
         durationMs = intent.getLongExtra(PlayerActivity.EXTRA_DURATION_MS, 0)
         title = intent.getStringExtra(PlayerActivity.EXTRA_TITLE) ?: ""
-        // Prebuilt by PlayerEntryActivity: local proxy URL, or a remote phone's.
+        // Prebuilt by PlayerEntryActivity.
         val streamUrl = intent.getStringExtra(PlayerActivity.EXTRA_STREAM_URL)
             ?: Tg.streamUrl(channel, messages, conns)
-        val remote = Settings.isRemoteClient(this)
 
-        // In local mode the on-device proxy must be up; in remote mode we stream
-        // from the phone, so the local engine/port isn't required.
-        if (channel == 0L || messages.isBlank() || (!remote && Tg.proxyPort <= 0)) {
+        if (channel == 0L || messages.isBlank() || Tg.proxyPort <= 0) {
             finish()
             return
         }
@@ -252,7 +249,7 @@ class PlayerActivityExo : AppCompatActivity() {
         view.player = exo
 
         val url = streamUrl
-        AppLog.i(TAG, "stream url: $url (engine=exo, remote=$remote, ready=${Tg.isReady})")
+        AppLog.i(TAG, "stream url: ${AppLog.redactUrl(url)} (engine=exo, ready=${Tg.isReady})")
         exo.setMediaItem(MediaItem.fromUri(url))
         exo.playWhenReady = true
         exo.prepare()
@@ -293,7 +290,7 @@ class PlayerActivityExo : AppCompatActivity() {
                 val cause = error.cause
                 val detail = when (cause) {
                     is HttpDataSource.InvalidResponseCodeException ->
-                        "HTTP ${cause.responseCode} dal proxy: ${String(cause.responseBody).take(200)}"
+                        "HTTP ${cause.responseCode} from proxy: ${String(cause.responseBody).take(200)}"
                     is HttpDataSource.HttpDataSourceException ->
                         "proxy I/O: ${cause.javaClass.simpleName}: ${cause.message}"
                     else -> "${cause?.javaClass?.simpleName ?: error.javaClass.simpleName}: ${cause?.message ?: error.message}"
@@ -301,7 +298,7 @@ class PlayerActivityExo : AppCompatActivity() {
                 AppLog.e(TAG, "player error [${error.errorCodeName}] $detail", error)
                 runCatching {
                     android.widget.Toast.makeText(
-                        this@PlayerActivityExo, "Errore player: $detail", android.widget.Toast.LENGTH_LONG,
+                        this@PlayerActivityExo, "Player error: $detail", android.widget.Toast.LENGTH_LONG,
                     ).show()
                 }
             }
@@ -472,21 +469,21 @@ class PlayerActivityExo : AppCompatActivity() {
         val bufPct = p.bufferedPercentage
         val bufAheadSec = p.totalBufferedDuration / 1000.0
         val state = when {
-            p.isPlaying -> "in riproduzione"
+            p.isPlaying -> "playing"
             p.playbackState == Player.STATE_BUFFERING -> "buffering"
-            p.playbackState == Player.STATE_ENDED -> "terminato"
-            else -> "in pausa"
+            p.playbackState == Player.STATE_ENDED -> "ended"
+            else -> "paused"
         }
 
         val sb = StringBuilder()
-        sb.append("Motore: ExoPlayer\n")
-        sb.append("Nome: ").append(if (title.isBlank()) "—" else title).append('\n')
-        sb.append("Stato: ").append(state).append('\n')
-        sb.append("Risoluzione: ").append(if (w > 0 && h > 0) "${w}x${h}" else "—").append('\n')
+        sb.append("Engine: ExoPlayer\n")
+        sb.append("Name: ").append(if (title.isBlank()) "-" else title).append('\n')
+        sb.append("State: ").append(state).append('\n')
+        sb.append("Resolution: ").append(if (w > 0 && h > 0) "${w}x${h}" else "-").append('\n')
         // Video codec + fps
         val vcodec = fmt?.sampleMimeType ?: fmt?.codecs
         if (vcodec != null) {
-            sb.append("Codec video: ").append(vcodec)
+            sb.append("Video codec: ").append(vcodec)
             val fps = fmt?.frameRate ?: Format.NO_VALUE.toFloat()
             if (fps > 0f) sb.append(String.format(" (%.2f fps)", fps))
             sb.append('\n')
@@ -497,17 +494,17 @@ class PlayerActivityExo : AppCompatActivity() {
             if (it.channelCount > 0) parts.append(" ${it.channelCount}ch")
             if (it.sampleRate > 0) parts.append(" ${it.sampleRate}Hz")
             if (!it.language.isNullOrBlank()) parts.append(" [${it.language}]")
-            sb.append("Codec audio: ").append(parts).append('\n')
+            sb.append("Audio codec: ").append(parts).append('\n')
         }
-        sb.append("Bitrate video: ").append(humanRate(videoBitrate.toDouble()))
+        sb.append("Video bitrate: ").append(humanRate(videoBitrate.toDouble()))
             .append(if (fromExo) " (decoder)" else " (media)").append('\n')
-        sb.append("Banda live: ").append(humanRate(liveBps)).append('\n')
-        sb.append("Banda media: ").append(humanRate(emaBps)).append('\n')
-        sb.append("Scaricato: ").append(humanSize(totalBytes)).append('\n')
+        sb.append("Live bandwidth: ").append(humanRate(liveBps)).append('\n')
+        sb.append("Average bandwidth: ").append(humanRate(emaBps)).append('\n')
+        sb.append("Downloaded: ").append(humanSize(totalBytes)).append('\n')
         sb.append("Buffer: ").append(bufPct).append("%  ").append(String.format("%.1fs", bufAheadSec)).append('\n')
-        sb.append("Modalità buffer: ").append(Settings.getBufferMode(this)).append('\n')
-        sb.append("Connessioni parallele: ").append(conns).append('\n')
-        sb.append("Posizione: ").append(fmtTime(p.currentPosition)).append(" / ").append(fmtTime(p.duration))
+        sb.append("Buffer mode: ").append(Settings.getBufferMode(this)).append('\n')
+        sb.append("Parallel connections: ").append(conns).append('\n')
+        sb.append("Position: ").append(fmtTime(p.currentPosition)).append(" / ").append(fmtTime(p.duration))
         statsView?.text = sb
     }
 

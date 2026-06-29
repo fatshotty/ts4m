@@ -47,7 +47,7 @@ class PlayerActivity : AppCompatActivity() {
         private const val SCRUB_COMMIT_DELAY_MS = 600L
         const val EXTRA_CHANNEL = "channel"
         const val EXTRA_MESSAGES = "messages"
-        const val EXTRA_STREAM_URL = "stream_url" // prebuilt URL (local or remote proxy)
+        const val EXTRA_STREAM_URL = "stream_url" // prebuilt local proxy URL
         const val EXTRA_CONNS = "conns"
         const val EXTRA_TITLE = "title"
         const val EXTRA_START_MS = "start_ms"
@@ -120,8 +120,7 @@ class PlayerActivity : AppCompatActivity() {
         durationMs = intent.getLongExtra(EXTRA_DURATION_MS, 0)
         title = intent.getStringExtra(EXTRA_TITLE) ?: ""
 
-        val remote = net.fatshotty.tgstream.data.Settings.isRemoteClient(this)
-        if (channel == 0L || messages.isBlank() || (!remote && Tg.proxyPort <= 0)) {
+        if (channel == 0L || messages.isBlank() || Tg.proxyPort <= 0) {
             finish()
             return
         }
@@ -141,7 +140,7 @@ class PlayerActivity : AppCompatActivity() {
 
         val url = intent.getStringExtra(EXTRA_STREAM_URL)
             ?: Tg.streamUrl(channel, messages, conns)
-        AppLog.i(TAG, "stream url: $url (remote=$remote, engineReady=${Tg.isReady})")
+        AppLog.i(TAG, "stream url: ${AppLog.redactUrl(url)} (engineReady=${Tg.isReady})")
 
         // libVLC's network cache is fixed at media init and cannot be resized at
         // runtime, so "dynamic" can't ramp here — it falls back to a fixed tier.
@@ -298,7 +297,7 @@ class PlayerActivity : AppCompatActivity() {
                 AppLog.e(TAG, "libVLC encountered error")
                 runOnUiThread {
                     runCatching {
-                        Toast.makeText(this, "Errore di riproduzione", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this, "Playback error", Toast.LENGTH_LONG).show()
                     }
                 }
             }
@@ -384,21 +383,21 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun updateStats(mp: MediaPlayer) {
         val sb = StringBuilder()
-        sb.append("Nome: ").append(if (title.isBlank()) "—" else title).append('\n')
+        sb.append("Name: ").append(if (title.isBlank()) "-" else title).append('\n')
         val state = when {
-            mp.isPlaying -> "in riproduzione"
+            mp.isPlaying -> "playing"
             bufferingPct < 100.0 -> "buffering ${bufferingPct.toInt()}%"
-            else -> "in pausa"
+            else -> "paused"
         }
-        sb.append("Stato: ").append(state).append('\n')
+        sb.append("State: ").append(state).append('\n')
 
         // Video track (resolution, codec, bitrate, fps)
         runCatching {
             val vt = mp.currentVideoTrack
             if (vt != null && vt.width > 0) {
-                sb.append("Risoluzione: ${vt.width}x${vt.height}\n")
+                sb.append("Resolution: ${vt.width}x${vt.height}\n")
                 val fps = if (vt.frameRateDen > 0) vt.frameRateNum.toDouble() / vt.frameRateDen else 0.0
-                sb.append("Codec video: ").append(vt.codec ?: "?")
+                sb.append("Video codec: ").append(vt.codec ?: "?")
                 if (vt.bitrate > 0) sb.append(" @ ").append(humanRate(vt.bitrate.toDouble()))
                 if (fps > 0) sb.append(String.format(" (%.2f fps)", fps))
                 sb.append('\n')
@@ -407,22 +406,22 @@ class PlayerActivity : AppCompatActivity() {
 
         // Audio track (codec, channels, rate, language) — cached once parsed.
         if (audioInfo == null) audioInfo = readAudioInfo(mp)
-        audioInfo?.let { sb.append("Codec audio: ").append(it).append('\n') }
+        audioInfo?.let { sb.append("Audio codec: ").append(it).append('\n') }
 
         // Download bandwidth (our own measurement from readBytes)
-        sb.append("Banda live: ").append(humanBytesRate(liveBytesPerSec)).append('\n')
-        sb.append("Banda media: ").append(humanBytesRate(emaBytesPerSec)).append('\n')
-        sb.append("Scaricato: ").append(humanSize(totalBytes)).append('\n')
+        sb.append("Live bandwidth: ").append(humanBytesRate(liveBytesPerSec)).append('\n')
+        sb.append("Average bandwidth: ").append(humanBytesRate(emaBytesPerSec)).append('\n')
+        sb.append("Downloaded: ").append(humanSize(totalBytes)).append('\n')
 
         lastStats?.let { st ->
             // libVLC reports these as a scaled float where value*8 ≈ Mbps.
             sb.append("inputBitrate: ").append(humanRate(st.inputBitrate * 8.0 * 1_000_000.0)).append('\n')
-            sb.append("demuxBitrate (contenuto): ").append(humanRate(st.demuxBitrate * 8.0 * 1_000_000.0)).append('\n')
+            sb.append("demuxBitrate (content): ").append(humanRate(st.demuxBitrate * 8.0 * 1_000_000.0)).append('\n')
         }
         sb.append("Buffering: ").append(bufferingPct.toInt()).append("%\n")
-        sb.append("Modalità buffer: ").append(net.fatshotty.tgstream.data.Settings.getBufferMode(this)).append('\n')
-        sb.append("Connessioni parallele: ").append(conns).append('\n')
-        sb.append("Posizione: ").append(fmtTime(mp.time)).append(" / ").append(fmtTime(durationMs))
+        sb.append("Buffer mode: ").append(net.fatshotty.tgstream.data.Settings.getBufferMode(this)).append('\n')
+        sb.append("Parallel connections: ").append(conns).append('\n')
+        sb.append("Position: ").append(fmtTime(mp.time)).append(" / ").append(fmtTime(durationMs))
         statsView?.text = sb
     }
 

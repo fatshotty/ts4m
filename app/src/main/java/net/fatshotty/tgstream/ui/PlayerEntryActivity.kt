@@ -3,6 +3,7 @@ package net.fatshotty.tgstream.ui
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -23,63 +24,60 @@ import net.fatshotty.tgstream.util.AppLog
  */
 class PlayerEntryActivity : AppCompatActivity() {
 
+    private val playerResultLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        setResult(result.resultCode, result.data)
+        finish()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         // Fresh log per playback so the screen shows only this session.
         AppLog.clear()
         val uri = intent?.data
-        AppLog.i(TAG, "Launch URI: $uri")
+        AppLog.i(TAG, "Launch URI: ${uri?.let { AppLog.redactUrl(it.toString()) }}")
         if (uri == null) {
-            fail("Nessun URL ricevuto")
+            fail("No URL received")
             return
         }
         Settings.setLastUrl(this, uri.toString()) // for the in-app speed test
-        val remote = Settings.isRemoteClient(this)
-        // Client mode streams from a paired phone's proxy → no local engine/login.
-        if (!remote && !Settings.isConfigured(this)) {
-            Toast.makeText(this, "Configura prima Telegram", Toast.LENGTH_LONG).show()
+        if (!Settings.isConfigured(this)) {
+            Toast.makeText(this, "Configure Telegram first", Toast.LENGTH_LONG).show()
             startActivity(Intent(this, LoginActivity::class.java))
             finish()
             return
         }
-        if (!remote) Tg.start(this)
+        Tg.start(this)
 
         lifecycleScope.launch {
             try {
                 val provider = ProviderRegistry.candidates(uri).firstOrNull()
-                    ?: ProviderRegistry.single
-                    ?: throw IllegalStateException("Nessun provider configurato")
+                    ?: throw IllegalStateException("Unsupported URL")
 
                 val result: ResolveResult = withContext(Dispatchers.IO) { provider.resolve(uri) }
 
-                if (!remote && !Tg.awaitReady()) {
-                    fail("Telegram non pronto/loggato")
+                if (!Tg.awaitReady()) {
+                    fail("Telegram is not ready/logged in")
                     return@launch
                 }
 
                 launchPlayer(result)
-                // Do NOT finish here: stay alive (invisibly) behind the player so we
+                // Do NOT finish here: stay alive invisibly behind the player so we
                 // can relay its result intent (MX-style position/duration) back to the
-                // external launcher (Stremio/Nuvio) in onActivityResult.
+                // external launcher (Stremio/Nuvio) through playerResultLauncher.
             } catch (t: Throwable) {
                 AppLog.w(TAG, "resolve failed", t)
-                fail(t.message ?: "Errore di risoluzione")
+                fail(t.message ?: "Unable to resolve URL")
             }
         }
     }
 
     private fun launchPlayer(r: ResolveResult) {
         val conns = Settings.getConnections(this)
-        val streamUrl = if (Settings.isRemoteClient(this)) {
-            Tg.remoteStreamUrl(
-                Settings.getRemoteHost(this), Settings.getRemoteToken(this),
-                r.stream.channelId, r.stream.messagesDash, conns,
-            )
-        } else {
-            Tg.streamUrl(r.stream.channelId, r.stream.messagesDash, conns)
-        }
-        AppLog.i(TAG, "stream url: $streamUrl (remote=${Settings.isRemoteClient(this)})")
+        val streamUrl = Tg.streamUrl(r.stream.channelId, r.stream.messagesDash, conns)
+        AppLog.i(TAG, "stream url: ${AppLog.redactUrl(streamUrl)}")
         // Resume position: an MX-style inbound `position` extra (ms) from the
         // launcher (Stremio/Nuvio external-player path) wins; otherwise the value
         // the provider resolved (e.g. Emby's saved position).
@@ -103,16 +101,16 @@ class PlayerEntryActivity : AppCompatActivity() {
             putExtra(PlayerActivity.EXTRA_DEVICE_ID, r.reporting.deviceId)
             putExtra(PlayerActivity.EXTRA_MEDIA_SOURCE, r.reporting.mediaSourceId)
         }
-        // Launch for result so the player's MX-style result intent (position/
-        // duration/end_by) can be relayed back to whoever launched us.
-        startActivityForResult(i, REQ_PLAYER)
+        // Launch for result so the player's MX-style result intent
+        // (position/duration/end_by) can be relayed back to whoever launched us.
+        playerResultLauncher.launch(i)
     }
 
     /**
      * Inbound resume position (ms) from the launching intent's MX-style `position`
      * extra, or -1 if absent. Launchers send it as int (MX) but tolerate long.
      * NOTE: Stremio sends it on the external-player (url) path, not on an opaque
-     * `externalUris` deep link — there resume must come from our own `pos=` param
+     * `externalUris` deep link; there resume must come from our own `pos=` param
      * or, in future, the Stremio-as-provider lookup.
      */
     private fun inboundResumeMs(): Long {
@@ -120,16 +118,6 @@ class PlayerEntryActivity : AppCompatActivity() {
         val asInt = i.getIntExtra(PlayerActivity.MX_POSITION, -1)
         if (asInt >= 0) return asInt.toLong()
         return i.getLongExtra(PlayerActivity.MX_POSITION, -1L)
-    }
-
-    // Relay the player's result verbatim to the external launcher, then finish.
-    @Deprecated("startActivityForResult relay; simplest transparent forwarding")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQ_PLAYER) {
-            setResult(resultCode, data)
-            finish()
-        }
     }
 
     private fun fail(msg: String) {
@@ -140,6 +128,5 @@ class PlayerEntryActivity : AppCompatActivity() {
 
     private companion object {
         const val TAG = "TgStream"
-        const val REQ_PLAYER = 1001
     }
 }

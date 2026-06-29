@@ -59,11 +59,6 @@ type Engine struct {
 	shutdownCh chan struct{} // closed to stop the client run loop
 	started    bool
 
-	// lanToken gates LAN (non-loopback) access to the proxy. Empty = LAN access
-	// denied (the device serves only its own localhost player). Set it to enable
-	// "server mode" so other devices on the WiFi can stream from this phone.
-	lanToken string
-
 	// Long-lived context for media downloads. Canceled only on Stop — never
 	// per-request, so finishing/aborting an HTTP request never cancels an
 	// in-flight getFile and thus never tears down a pooled connection.
@@ -108,19 +103,19 @@ func NewEngine(apiID int, apiHash string, sessionFile string) *Engine {
 	}
 	dlCtx, dlCancel := context.WithCancel(context.Background())
 	return &Engine{
-		apiID:      apiID,
-		apiHash:    apiHash,
-		session:    sessionFile,
-		phoneCh:    make(chan string, 1),
-		codeCh:     make(chan string, 1),
-		pwdCh:      make(chan string, 1),
-		readyCh:    make(chan struct{}),
-		shutdownCh: make(chan struct{}),
+		apiID:       apiID,
+		apiHash:     apiHash,
+		session:     sessionFile,
+		phoneCh:     make(chan string, 1),
+		codeCh:      make(chan string, 1),
+		pwdCh:       make(chan string, 1),
+		readyCh:     make(chan struct{}),
+		shutdownCh:  make(chan struct{}),
 		docs:        make(map[string]*tg.Document),
 		docInflight: make(map[string]*docCall),
 		chanCache:   make(map[int64]tg.InputChannelClass),
-		dlCtx:      dlCtx,
-		dlCancel:   dlCancel,
+		dlCtx:       dlCtx,
+		dlCancel:    dlCancel,
 	}
 }
 
@@ -129,21 +124,6 @@ func (e *Engine) SetLoginListener(l LoginListener) {
 	e.mu.Lock()
 	e.listener = l
 	e.mu.Unlock()
-}
-
-// SetLanToken enables (non-empty) or disables (empty) LAN access to the proxy.
-// When set, requests from other devices must carry ?token=<token>; loopback
-// requests (this device's own player) never need it.
-func (e *Engine) SetLanToken(token string) {
-	e.mu.Lock()
-	e.lanToken = token
-	e.mu.Unlock()
-}
-
-func (e *Engine) lanTokenValue() string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.lanToken
 }
 
 func (e *Engine) setState(state, msg string) {
@@ -220,6 +200,14 @@ func (e *Engine) Start() error {
 			return nil
 		})
 		if runErr != nil {
+			if !e.IsReady() {
+				e.mu.Lock()
+				e.started = false
+				e.client = nil
+				e.api = nil
+				e.peers = nil
+				e.mu.Unlock()
+			}
 			e.setState(StateError, runErr.Error())
 		}
 	}()

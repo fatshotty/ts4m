@@ -32,11 +32,11 @@ class EmbyProvider : Provider {
 
     override fun resolve(uri: Uri): ResolveResult {
         val serverBase = (uri.scheme ?: "http") + "://" + (uri.authority
-            ?: throw ProviderException("URL Emby senza host"))
+            ?: throw ProviderException("Emby URL has no host"))
         val token = findToken(uri)
-            ?: throw ProviderException("token Emby non trovato nell'URL: $uri")
+            ?: throw ProviderException("Emby token not found in URL")
         val itemId = findItemId(uri)
-            ?: throw ProviderException("itemId Emby non trovato nell'URL: $uri")
+            ?: throw ProviderException("Emby itemId not found in URL")
 
         // Reuse the session/device identity Emby put in the launch URL so our
         // playback reports attach to the very session Emby already opened —
@@ -151,19 +151,19 @@ class EmbyProvider : Provider {
 
     /** Parses http://IP:PORT/download/{ID}/{channel_id}/{m1-m2-...}. */
     private fun parseDownloadUrl(raw: String): Pair<Long, String> {
-        if (raw.isBlank()) throw ProviderException("Emby: media path (.strm) vuoto")
+        if (raw.isBlank()) throw ProviderException("Emby: empty media path (.strm)")
         val u = runCatching { Uri.parse(raw.trim()) }.getOrNull()
-            ?: throw ProviderException("Emby: .strm non è un URL valido: $raw")
+            ?: throw ProviderException("Emby: .strm is not a valid URL: $raw")
         val segs = u.pathSegments
         val idx = segs.indexOfFirst { it.equals("download", ignoreCase = true) }
         if (idx < 0 || idx + 3 > segs.size) {
-            throw ProviderException("Emby: formato .strm inatteso: $raw")
+            throw ProviderException("Emby: unexpected .strm format: $raw")
         }
         val channelStr = segs[idx + 2]
         val messages = segs[idx + 3]
         val channelId = channelStr.toLongOrNull()
-            ?: throw ProviderException("Emby: channel_id non numerico in .strm: $channelStr")
-        if (messages.isBlank()) throw ProviderException("Emby: message id mancanti in .strm")
+            ?: throw ProviderException("Emby: non-numeric channel_id in .strm: $channelStr")
+        if (messages.isBlank()) throw ProviderException("Emby: missing message ids in .strm")
         return channelId to messages
     }
 }

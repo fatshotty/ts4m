@@ -64,14 +64,14 @@ class LoginActivity : AppCompatActivity() {
 
     private fun showCredentialsForm() {
         clear()
-        info.text = "Inserisci le tue credenziali Telegram (my.telegram.org)."
+        info.text = "Enter your Telegram credentials (my.telegram.org)."
         val idField = field("api_id", InputType.TYPE_CLASS_NUMBER)
         val hashField = field("api_hash")
-        val save = button("Salva e continua") {
+        val save = button("Save and continue") {
             val id = idField.text.toString().trim().toIntOrNull()
             val hash = hashField.text.toString().trim()
             if (id == null || id <= 0 || hash.isBlank()) {
-                toast("api_id/api_hash non validi")
+                toast("Invalid api_id/api_hash")
                 return@button
             }
             Settings.setApiCredentials(this, id, hash)
@@ -94,21 +94,21 @@ class LoginActivity : AppCompatActivity() {
     private fun render(s: Tg.State) {
         when (s.phase) {
             Tg.Phase.NEED_PHONE -> promptSingle(
-                "Numero di telefono (+39…)", InputType.TYPE_CLASS_PHONE
+                "Phone number (+country code)", InputType.TYPE_CLASS_PHONE
             ) { Tg.submitPhone(it) }
             Tg.Phase.NEED_CODE -> promptSingle(
-                "Codice ricevuto su Telegram", InputType.TYPE_CLASS_NUMBER
+                "Code received in Telegram", InputType.TYPE_CLASS_NUMBER
             ) { Tg.submitCode(it) }
             Tg.Phase.NEED_PASSWORD -> promptSingle(
                 "Password 2FA", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             ) { Tg.submitPassword(it) }
             Tg.Phase.AUTHORIZED, Tg.Phase.READY -> {
-                toast("Login completato")
+                toast("Login complete")
                 startActivity(Intent(this, MainActivity::class.java))
                 finish()
             }
-            Tg.Phase.CONNECTING -> { clear(); info.text = "Connessione…" }
-            Tg.Phase.ERROR -> { clear(); info.text = "Errore: ${s.message}" }
+            Tg.Phase.CONNECTING -> { clear(); info.text = "Connecting..." }
+            Tg.Phase.ERROR -> { clear(); info.text = "Error: ${s.message}" }
             else -> {}
         }
     }
@@ -119,11 +119,11 @@ class LoginActivity : AppCompatActivity() {
         clear()
         info.text = hint
         val f = field(hint, type)
-        val b = button("Invia") {
+        val b = button("Send") {
             val v = f.text.toString().trim()
             if (v.isNotBlank()) {
                 submit(v)
-                clear(); info.text = "Verifica in corso…"
+                clear(); info.text = "Verifying..."
             }
         }
         root.addView(f)

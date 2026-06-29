@@ -12,10 +12,9 @@ localhost HTTP proxy — so large buffers stay in native memory and never cross
 the JNI boundary.
 
 - **Direct playback** of channel media on a TV box or phone.
-- **Launchable from any app** via a link following the pattern
-  `/{channel_id}/{ordered-parts-dashed}` — the channel ID followed by the file's
-  part message IDs, in order, dash-separated
-  (e.g. `/1234567890/15-16-17`).
+- **Emby external-player integration**: Emby launches the app with its normal
+  stream URL; tgstream resolves the item metadata and expects the backing
+  `.strm` path to contain `/download/{id}/{channel_id}/{ordered-parts-dashed}`.
 - **Rebuilds split files**: when a large file is stored as several smaller parts
   across multiple Telegram messages, the app stitches them back together **in
   order** and serves one continuous stream.
@@ -41,7 +40,8 @@ decrypted on-device. On 64-bit boxes this is hardware-accelerated for free; on
 AES — which became the bottleneck for high-bitrate playback.
 
 We added an **ARMv8 hardware-AES** decrypt path (cgo, ARM crypto extension),
-runtime-gated with a software fallback. Measured **on a real 32-bit ARMv8 box**,
+runtime-gated with a software fallback and exposed in Settings as a warning when
+hardware decrypt is unavailable or cannot be verified. Measured **on a real 32-bit ARMv8 box**,
 decrypting AES-256-IGE on one core (output validated byte-for-byte against the
 software path):
 

@@ -192,14 +192,14 @@ func (e *Engine) fetchDocument(_ context.Context, channelID int64, input tg.Inpu
 	doc, err := e.getMessageDocument(channelID, input, msgID)
 
 	e.docMu.Lock()
+	call.doc, call.err = doc, err
 	if err == nil {
 		e.docs[key] = doc
 	}
 	delete(e.docInflight, key)
+	close(call.done)
 	e.docMu.Unlock()
 
-	call.doc, call.err = doc, err
-	close(call.done)
 	return doc, err
 }
 

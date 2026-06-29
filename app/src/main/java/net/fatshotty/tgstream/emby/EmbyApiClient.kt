@@ -101,6 +101,6 @@ class EmbyApiClient(
         val q = JSONObject(get("/Items?Ids=$itemId&Fields=Path,MediaSources"))
         val arr = q.optJSONArray("Items")
         if (arr != null && arr.length() > 0) return arr.getJSONObject(0)
-        throw RuntimeException("Emby: item $itemId non trovato")
+        throw RuntimeException("Emby: item $itemId not found")
     }
 }

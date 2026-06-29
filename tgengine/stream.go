@@ -29,28 +29,18 @@ const (
 
 // proxyServer is the localhost HTTP server ExoPlayer streams from.
 type proxyServer struct {
-	e        *Engine
-	ln       net.Listener
-	srv      *http.Server
-	port     int
+	e    *Engine
+	ln   net.Listener
+	srv  *http.Server
+	port int
 }
 
-// lanProxyPort is the preferred fixed port for the proxy so a paired box only has
-// to be told the phone's IP once (it stays valid across app restarts). Falls back
-// to an ephemeral port if it's taken.
-const lanProxyPort = 8770
-
-// StartProxy starts the HTTP proxy and returns the port it listens on. It binds on
-// all interfaces (0.0.0.0) so it can double as a LAN "server" for other devices;
-// LAN access is still gated by SetLanToken (loopback is always allowed).
+// StartProxy starts the local HTTP proxy and returns the port it listens on.
 func (e *Engine) StartProxy() (int, error) {
 	if e.proxy != nil {
 		return e.proxy.port, nil
 	}
-	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", lanProxyPort))
-	if err != nil {
-		ln, err = net.Listen("tcp", "0.0.0.0:0")
-	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return 0, err
 	}
@@ -83,15 +73,10 @@ type partInfo struct {
 // with HTTP range support, streaming bytes from Telegram.
 func (p *proxyServer) handleStream(w http.ResponseWriter, r *http.Request) {
 	e := p.e
-	// LAN gate: requests from other devices must carry the token; loopback (this
-	// device's own player) is always allowed. Empty token = LAN access disabled.
-	if !isLoopbackAddr(r.RemoteAddr) {
-		tok := e.lanTokenValue()
-		if tok == "" || r.URL.Query().Get("token") != tok {
-			logW("stream req rejected: unauthorized LAN client %s", r.RemoteAddr)
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
 	if !e.IsReady() {
 		logW("stream req rejected: engine not ready")
@@ -444,8 +429,8 @@ func (e *Engine) getCDNChunk(ctx context.Context, redirect *tg.UploadFileCDNRedi
 		case *tg.UploadCDNFileReuploadNeeded:
 			// Ask the master DC to re-upload to CDN, then retry.
 			if _, err := e.api.UploadReuploadCDNFile(ctx, &tg.UploadReuploadCDNFileRequest{
-				FileToken:     redirect.FileToken,
-				RequestToken:  f.RequestToken,
+				FileToken:    redirect.FileToken,
+				RequestToken: f.RequestToken,
 			}); err != nil {
 				return nil, err
 			}
@@ -672,17 +657,6 @@ func parseRange(header string, size int64) (start, end int64, ok bool) {
 		en = size - 1
 	}
 	return s, en, true
-}
-
-// isLoopbackAddr reports whether a "host:port" remote address is a loopback
-// client (this device's own player), which never needs the LAN token.
-func isLoopbackAddr(remoteAddr string) bool {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		host = remoteAddr
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 func atoiDefault(s string, def int) int {

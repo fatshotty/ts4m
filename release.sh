@@ -21,6 +21,12 @@ VC="$(git rev-list --count HEAD)"
 VN="0.1.$VC"
 TAG="v$VN"
 
+if [ -n "$(git status --porcelain)" ]; then
+  echo "Refusing to release from a dirty working tree."
+  echo "Commit or stash changes first so versionCode=$VC maps to an exact source state."
+  exit 1
+fi
+
 if [ ! -f app/libs/tgengine.aar ]; then
   echo "tgengine.aar missing — building it…"
   bash tgengine/build-aar.sh
@@ -33,7 +39,7 @@ OUT="app/build/outputs/apk/debug"
 WORK="$(mktemp -d)"
 cp "$OUT/app-arm64-v8a-debug.apk"   "$WORK/tgstream-arm64-v8a.apk"
 cp "$OUT/app-armeabi-v7a-debug.apk" "$WORK/tgstream-armeabi-v7a.apk"
-printf '{ "versionCode": %s, "versionName": "%s", "notes": "%s" }\n' "$VC" "$VN" "$NOTES" > "$WORK/version.json"
+python3 -c 'import json,sys; json.dump({"versionCode": int(sys.argv[1]), "versionName": sys.argv[2], "notes": sys.argv[3]}, sys.stdout); print()' "$VC" "$VN" "$NOTES" > "$WORK/version.json"
 
 echo "Publishing release ${TAG} to ${REPO} ..."
 gh release create "$TAG" \

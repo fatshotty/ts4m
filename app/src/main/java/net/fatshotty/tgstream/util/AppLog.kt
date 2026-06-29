@@ -17,6 +17,10 @@ import java.util.Locale
  */
 object AppLog {
     private const val MAX = 2000
+    private val secretQueryParam = Regex(
+        "([?&](?:api_key|apikey|api-token|apitoken|x-emby-token|token)=)[^&]+",
+        RegexOption.IGNORE_CASE,
+    )
     private val fmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     private val buffer = ArrayDeque<String>()
 
@@ -46,6 +50,9 @@ object AppLog {
             _lines.value = emptyList()
         }
     }
+
+    fun redactUrl(url: String): String =
+        secretQueryParam.replace(url) { it.groupValues[1] + "***" }
 
     private fun add(level: String, tag: String, msg: String) {
         val line = "${fmt.format(Date())} $level/$tag: $msg"

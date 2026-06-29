@@ -34,9 +34,13 @@ object Tg {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var engine: Engine? = null
+    @Volatile
     private var startRequested = false
 
     val isReady: Boolean get() = engine?.isReady == true && proxyPort > 0
+
+    val decryptHardwareStatus: String
+        get() = runCatching { Tgengine.decryptHardwareStatus() }.getOrDefault("unknown")
 
     private val logSink = Logger { level, msg ->
         when (level) {
@@ -59,6 +63,7 @@ object Tg {
             else -> Phase.IDLE
         }
         _state.value = State(phase, message ?: "")
+        if (phase == Phase.ERROR) startRequested = false
         if (phase == Phase.AUTHORIZED) ensureProxy()
     }
 
@@ -75,11 +80,6 @@ object Tg {
             sessionFile,
         )
         e.setLoginListener(listener)
-        // If this device is a LAN "server", enable token-gated remote access so a
-        // paired box can stream from it even without opening the Server screen.
-        if (Settings.getServerEnabled(ctx)) {
-            runCatching { e.setLanToken(Settings.getLanToken(ctx)) }
-        }
         engine = e
         return true
     }
@@ -94,6 +94,7 @@ object Tg {
             try {
                 engine?.start()
             } catch (t: Throwable) {
+                startRequested = false
                 _state.value = State(Phase.ERROR, t.message ?: "start failed")
             }
         }
@@ -121,19 +122,6 @@ object Tg {
         "http://127.0.0.1:$proxyPort/stream?channel=$channelId&messages=$messagesDash&conns=$conns"
 
     /**
-     * Builds a stream URL pointing at a remote phone's proxy (box "client mode").
-     * host is "ip:port"; token authorizes the LAN request.
-     */
-    fun remoteStreamUrl(host: String, token: String, channelId: Long, messagesDash: String, conns: Int): String =
-        "http://$host/stream?channel=$channelId&messages=$messagesDash&conns=$conns&name=video.mkv" +
-            if (token.isNotBlank()) "&token=$token" else ""
-
-    /** Enables/disables LAN ("server") access to this device's proxy. */
-    fun setLanToken(token: String) {
-        scope.launch { runCatching { engine?.setLanToken(token) } }
-    }
-
-    /**
      * Uploads [text] as a .txt to the user's Telegram Saved Messages. Runs off the
      * main thread; [onResult] is posted back on the main thread with success and an
      * optional error message.
@@ -141,7 +129,7 @@ object Tg {
     fun sendLog(name: String, text: String, onResult: (Boolean, String?) -> Unit) {
         val e = engine
         if (e == null) {
-            onResult(false, "engine non inizializzato")
+            onResult(false, "engine not initialized")
             return
         }
         scope.launch {

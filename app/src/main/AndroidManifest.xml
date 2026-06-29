@@ -52,10 +52,6 @@
             android:name=".ui.SpeedTestActivity"
             android:exported="false" />
 
-        <activity
-            android:name=".ui.ServerActivity"
-            android:exported="false" />
-
         <!-- External-player entry: other apps (Emby) launch us via ACTION_VIEW. -->
         <activity
             android:name=".ui.PlayerEntryActivity"
@@ -73,13 +69,6 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="video/*" />
-            </intent-filter>
-            <intent-filter android:priority="50">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="http" />
-                <data android:scheme="https" />
             </intent-filter>
         </activity>
 
