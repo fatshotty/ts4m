@@ -20,7 +20,11 @@ credentials (api_id/api_hash from my.telegram.org); the app downloads the file
 in chunks over MTProto and serves it to a local player through a localhost HTTP
 proxy. Typical use: TV box / phone.
 
-The current source-provider integration is Emby. Emby launches tgstream as an
+The canonical direct launch format is
+`tgstream://play?channel=<id>&messages=<m1-m2-...>`, with optional `title` and
+`pos` query parameters. It starts playback without source-app reporting.
+
+Emby is also supported as a source adapter. Emby launches tgstream as an
 external player with its normal stream URL; tgstream resolves the item metadata
 through Emby's API and expects the backing `.strm` media path to contain
 `/download/{id}/{channel_id}/{ordered-parts-dashed}`. The channel ID is followed
@@ -34,7 +38,7 @@ the given order and serves them as **one continuous stream**.
 | Part | Where | Role |
 |---|---|---|
 | **Android app (Kotlin)** | [app/src/main/java/net/fatshotty/tgstream/](../app/src/main/java/net/fatshotty/tgstream/) | UI, settings, players, updater |
-| **Go engine (`tgengine`)** | [tgengine/](../tgengine/) | MTProto client, streaming pipeline, HTTP proxy, disk cache |
+| **Go engine (`tgengine`)** | [tgengine/](../tgengine/) | MTProto client, streaming pipeline, HTTP proxy |
 
 They talk via **gomobile**: the Go engine is compiled into an AAR
 (`app/libs/tgengine.aar`, built with [tgengine/build-aar.sh](../tgengine/build-aar.sh))
@@ -146,12 +150,21 @@ launch URLs, asks [ProviderRegistry.kt](../app/src/main/java/net/fatshotty/tgstr
 for a matching provider, resolves the launch into a `StreamSpec`, waits for the
 engine to be ready, and launches the chosen player.
 
-The current provider registry contains Emby only. [EmbyProvider.kt](../app/src/main/java/net/fatshotty/tgstream/provider/EmbyProvider.kt)
-extracts the Emby server, item id, token, and playback session metadata from the
-launch URL, resolves the item's `.strm` path, and parses
-`/download/{id}/{channel_id}/{ordered-parts-dashed}` into the Telegram stream
-spec. Playback progress is reported back to Emby with the original session
-metadata. Direct `tgstream://` links are planned but not implemented yet.
+The provider registry currently contains:
+
+- [DirectProvider.kt](../app/src/main/java/net/fatshotty/tgstream/provider/DirectProvider.kt):
+  handles canonical `tgstream://play?...` links and returns
+  `ReportingContext(kind = "none")`.
+- [EmbyProvider.kt](../app/src/main/java/net/fatshotty/tgstream/provider/EmbyProvider.kt):
+  extracts the Emby server, item id, token, and playback session metadata from
+  the launch URL, resolves the item's `.strm` path, and parses
+  `/download/{id}/{channel_id}/{ordered-parts-dashed}` into the Telegram stream
+  spec. Playback progress is reported back to Emby with the original session
+  metadata.
+
+[DirectLinkCodec.kt](../app/src/main/java/net/fatshotty/tgstream/provider/DirectLinkCodec.kt)
+owns the canonical direct-link parsing and normalization logic used by direct
+links and future source adapters.
 
 ---
 

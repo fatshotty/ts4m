@@ -52,11 +52,19 @@
             android:name=".ui.SpeedTestActivity"
             android:exported="false" />
 
-        <!-- External-player entry: other apps (Emby) launch us via ACTION_VIEW. -->
+        <!-- External-player entry: other apps launch us via ACTION_VIEW. -->
         <activity
             android:name=".ui.PlayerEntryActivity"
             android:exported="true"
             android:theme="@style/Theme.TgStream.Invisible">
+            <intent-filter android:priority="60">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="tgstream"
+                    android:host="play" />
+            </intent-filter>
             <intent-filter android:priority="50">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
