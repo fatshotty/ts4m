@@ -15,24 +15,26 @@ buffering, login, update).
 ## What it does
 
 Streams video files hosted on Telegram channels **directly**, without
-downloading the whole file first. Login uses Telegram api_id/api_hash — either
-the app's built-in defaults or the user's own (from my.telegram.org); the app
-downloads the file in chunks over MTProto and serves it to a local player
-through a localhost HTTP proxy. Typical use: TV box / phone.
+downloading the whole file first. The user logs in with their own Telegram
+credentials (api_id/api_hash from my.telegram.org); the app downloads the file
+in chunks over MTProto and serves it to a local player through a localhost HTTP
+proxy. Typical use: TV box / phone.
 
-The app is launched with a link following the pattern
-`/{channel_id}/{ordered-parts-dashed}` — the channel ID followed by the file's
-part message IDs, in order, dash-separated (e.g. `/1234567890/15-16-17`). When a
-large file is stored as **several smaller parts** across multiple Telegram
-messages, the engine downloads them in the given order and serves them as **one
-continuous stream**.
+The current source-provider integration is Emby. Emby launches tgstream as an
+external player with its normal stream URL; tgstream resolves the item metadata
+through Emby's API and expects the backing `.strm` media path to contain
+`/download/{id}/{channel_id}/{ordered-parts-dashed}`. The channel ID is followed
+by the file's part message IDs, in order, dash-separated (for example
+`/download/7/1234567890/15-16-17`). When a large file is stored as **several
+smaller parts** across multiple Telegram messages, the engine downloads them in
+the given order and serves them as **one continuous stream**.
 
 ## The two halves and how they communicate
 
 | Part | Where | Role |
 |---|---|---|
 | **Android app (Kotlin)** | [app/src/main/java/net/fatshotty/tgstream/](../app/src/main/java/net/fatshotty/tgstream/) | UI, settings, players, updater |
-| **Go engine (`tgengine`)** | [tgengine/](../tgengine/) | MTProto client, streaming pipeline, HTTP proxy |
+| **Go engine (`tgengine`)** | [tgengine/](../tgengine/) | MTProto client, streaming pipeline, HTTP proxy, disk cache |
 
 They talk via **gomobile**: the Go engine is compiled into an AAR
 (`app/libs/tgengine.aar`, built with [tgengine/build-aar.sh](../tgengine/build-aar.sh))
@@ -54,9 +56,8 @@ MTProto library: **`github.com/gotd/td` v0.111.0**. Session persisted to a file
 
 | File | Role |
 |---|---|
-| [engine.go](../tgengine/engine.go) | `Engine` struct: MTProto + API clients, login state machine, per-DC media pools, document/channel caches, long-lived download context `dlCtx`. Public methods: `Start`, `IsReady`, `SubmitPhone/Code/Password`, `SetCacheDir`, `StartProxy`. |
+| [engine.go](../tgengine/engine.go) | `Engine` struct: MTProto + API clients, login state machine, per-DC media pools, document/channel caches, long-lived download context `dlCtx`. Public methods: `Start`, `IsReady`, `SubmitPhone/Code/Password`, `StartProxy`. |
 | [stream.go](../tgengine/stream.go) | HTTP proxy + streaming pipeline (see below). |
-| [diskcache.go](../tgengine/diskcache.go) | Optional on-disk write-ahead circular ring (one stream at a time). |
 | [resolve.go](../tgengine/resolve.go) | Channel resolution (Bot-API IDs → raw) and dialog sync to learn access hashes. |
 | [log.go](../tgengine/log.go) | Logging bridge to Kotlin (`Logger` implemented on the app side). |
 | [sendlog.go](../tgengine/sendlog.go) | Uploads the session log to Telegram "Saved Messages". |
@@ -85,7 +86,10 @@ MTProto library: **`github.com/gotd/td` v0.111.0**. Session persisted to a file
 All MTProto traffic is AES-256-IGE (handled by gotd). On **arm64** builds Go
 uses the stdlib's hardware AES; on **armeabi-v7a (32-bit)** the stdlib is
 software-only, so in the patched gotd the IGE decrypt uses ARMv8 hardware AES via
-cgo (~54× faster). CDN chunks use AES-CTR (Go stdlib).
+cgo (~54× faster) when the CPU exposes the AES extension. Kotlin exposes this as
+`Tg.decryptHardwareStatus`, and Settings shows a non-blocking warning when
+hardware decrypt is unavailable or cannot be verified. CDN chunks use AES-CTR
+(Go stdlib).
 
 ---
 
@@ -98,11 +102,7 @@ Two engines, selected in Settings:
   with debounced seek commit, hardware decoder (great HDR/Dolby Vision).
 - **libVLC** — [player/PlayerActivity.kt](../app/src/main/java/net/fatshotty/tgstream/player/PlayerActivity.kt).
   For containers ExoPlayer can't handle (e.g. large OpenDML AVI); native-memory
-  cache; hardware decode on real devices.
-
-On exit both players return an **MX Player-style result intent** (`end_by` +
-`position`/`duration` in ms) so an external launcher (e.g. Stremio/Nuvio) can
-update its Continue Watching; an inbound MX `position` extra is honored to resume.
+  cache; hardware decode is enabled on real devices and disabled on emulators.
 
 **Buffering** ([util/BufferTuning.kt](../app/src/main/java/net/fatshotty/tgstream/util/BufferTuning.kt)):
 LOW/MID/HIGH/VHIGH tiers (ExoPlayer fixes **MB**, libVLC fixes **seconds**), plus
@@ -114,20 +114,16 @@ Details and tables in [buffer-tuning.md](buffer-tuning.md).
 
 ## Settings ([data/Settings.kt](../app/src/main/java/net/fatshotty/tgstream/data/Settings.kt), [ui/SettingsActivity.kt](../app/src/main/java/net/fatshotty/tgstream/ui/SettingsActivity.kt))
 
-- **Max connections per stream** (1–16, default 3) — a ceiling; the engine
-  auto-scales the actual count by file size (~1 connection per 20 GiB)
+- **Connections per stream** (1–16, default 3)
 - **Player engine**: ExoPlayer / libVLC
 - **Buffer tier**: LOW/MID/HIGH/VHIGH or DYNAMIC
-- **Pre-buffer**: 0 = AUTO (bitrate-scaled) or fixed 2/5/10/15/20/30 s
-- **Telegram credentials** (advanced): leave empty to use the app's built-in
-  defaults, or enter your own (which take priority)
+- **Pre-buffer**: 0 = AUTO (bitrate-scaled) or fixed 5/10/15/20/30 s
+- **Telegram credentials**: optional user api_id/api_hash override
+- **AES decrypt warning**: shown only when hardware decrypt is unavailable or
+  unknown
 
-User-entered credentials are stored in SharedPreferences in cleartext (they're
-the user's own, never leave the device; no Keystore, for compatibility with odd
-devices). The app's built-in defaults instead live XOR-obfuscated inside the Go
-engine and are injected at build time via `-ldflags` (see
-[tgengine/credentials.go](../tgengine/credentials.go)), so no plaintext ships in
-git or in the APK's Java/DEX.
+Stored in SharedPreferences in cleartext (they're the user's own credentials,
+never leave the device; no Keystore, for compatibility with odd devices).
 
 ---
 
@@ -145,14 +141,17 @@ without re-logging in, and the HTTP proxy starts.
 ## Invocation / entry point
 
 [PlayerEntryActivity.kt](../app/src/main/java/net/fatshotty/tgstream/ui/PlayerEntryActivity.kt)
-is the invisible entry point exported for `ACTION_VIEW`, so the app can be
-launched from any other app. The link follows the pattern
-`/{channel_id}/{ordered-parts-dashed}` — the channel ID followed by the file's
-part message IDs, in order, dash-separated (e.g. `/1234567890/15-16-17`). The
-entry point parses it into a `StreamSpec` (channel + ordered message IDs), waits
-for the engine to be ready, and launches the chosen player. When the file is
-split across several messages, the parts are streamed back-to-back as one
-continuous file.
+is the invisible entry point exported for `ACTION_VIEW`. It receives provider
+launch URLs, asks [ProviderRegistry.kt](../app/src/main/java/net/fatshotty/tgstream/provider/ProviderRegistry.kt)
+for a matching provider, resolves the launch into a `StreamSpec`, waits for the
+engine to be ready, and launches the chosen player.
+
+The current provider registry contains Emby only. [EmbyProvider.kt](../app/src/main/java/net/fatshotty/tgstream/provider/EmbyProvider.kt)
+extracts the Emby server, item id, token, and playback session metadata from the
+launch URL, resolves the item's `.strm` path, and parses
+`/download/{id}/{channel_id}/{ordered-parts-dashed}` into the Telegram stream
+spec. Playback progress is reported back to Emby with the original session
+metadata. Direct `tgstream://` links are planned but not implemented yet.
 
 ---
 
@@ -169,4 +168,4 @@ and publishes to GitHub (`gh release create`) with both APKs + `version.json`.
 The engine AAR must be rebuilt first if the Go code changed.
 
 ---
-_Last updated: 2026-06-25._
+_Last updated: 2026-06-29._
