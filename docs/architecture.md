@@ -24,14 +24,17 @@ The canonical direct launch format is
 `tgstream://play?channel=<id>&messages=<m1-m2-...>`, with optional `title` and
 `pos` query parameters. It starts playback without source-app reporting.
 
-Emby is also supported as a source adapter. Emby launches tgstream as an
-external player with its normal stream URL; tgstream resolves the item metadata
-through Emby's API and expects the backing `.strm` media path to contain
-`/download/{id}/{channel_id}/{ordered-parts-dashed}`. The channel ID is followed
-by the file's part message IDs, in order, dash-separated (for example
-`/download/7/1234567890/15-16-17`). When a large file is stored as **several
-smaller parts** across multiple Telegram messages, the engine downloads them in
-the given order and serves them as **one continuous stream**.
+Emby and Jellyfin are also supported through the same source adapter. The media
+server launches tgstream as an external player with its normal stream URL;
+tgstream resolves the item metadata through the Emby-compatible API and expects
+the backing `.strm` media URL to carry a fragment directive such as
+`#tgstream/{channel_id}/{ordered-parts-dashed}`. The URL before `#` stays
+playable by Emby/Jellyfin/ffmpeg; tgstream uses only the fragment directive and
+derives its internal stream id from the Telegram coordinates. Server path
+prefixes such as `/emby` and `/jellyfin` stay in the API base URL so playback
+progress is reported to the same mounted server. When a large file is stored as
+**several smaller parts** across multiple Telegram messages, the engine downloads
+them in the given order and serves them as **one continuous stream**.
 
 ## The two halves and how they communicate
 
@@ -156,11 +159,12 @@ The provider registry currently contains:
   handles canonical `tgstream://play?...` links and returns
   `ReportingContext(kind = "none")`.
 - [EmbyProvider.kt](../app/src/main/java/net/fatshotty/tgstream/provider/EmbyProvider.kt):
-  extracts the Emby server, item id, token, and playback session metadata from
-  the launch URL, resolves the item's `.strm` path, and parses
-  `/download/{id}/{channel_id}/{ordered-parts-dashed}` into the Telegram stream
-  spec. Playback progress is reported back to Emby with the original session
-  metadata.
+  extracts the Emby/Jellyfin server base, item id, token, and playback session
+  metadata from the launch URL, resolves the item's `.strm` path, and parses a
+  `#tgstream/...` fragment directive into the Telegram stream spec. Explicit
+  launch start ticks win over the saved item resume position, so "restart" and
+  "continue watching" keep their source-app meaning. Playback progress is
+  reported back to the same server with the original session metadata.
 
 [DirectLinkCodec.kt](../app/src/main/java/net/fatshotty/tgstream/provider/DirectLinkCodec.kt)
 owns the canonical direct-link parsing and normalization logic used by direct

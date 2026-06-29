@@ -2,23 +2,30 @@ package net.fatshotty.tgstream.provider
 
 import android.net.Uri
 import net.fatshotty.tgstream.emby.EmbyApiClient
+import java.net.URI
 import java.util.UUID
 
 /**
- * Emby integration.
+ * Emby/Jellyfin integration.
  *
  * Launch URL (from Emby external player), e.g.:
  *   http://server:port/.../Videos/{itemId}/stream.mkv?api_key=...
  *   http://server:port/item/{itemId}/stream/video.mkv?api-token=...
  *
- * We extract serverBase + itemId + token, ask Emby for the item, read the
- * resolved .strm content from MediaSources[0].Path, which must look like:
- *   http://IP:PORT/download/{ID}/{channel_id}/{message_id-dash}
- * and parse channel_id + message ids from it.
+ * We extract serverBase + itemId + token, ask the media server for the item, read the
+ * resolved .strm content from MediaSources[0].Path, and parse the tgstream
+ * directive from its fragment:
+ *   http://host/playable-file.mkv#tgstream/{channel_id}/{message_id-dash}
+ *
+ * The URL before `#` remains a normal Emby/ffmpeg-playable URL. The stream id is
+ * generated internally from the resolved Telegram coordinates.
+ *
+ * If the launch URL carries StartTimeTicks/StartPositionTicks, that explicit
+ * playback choice wins over the saved item resume position.
  */
 class EmbyProvider : Provider {
     override val id = "emby"
-    override val label = "Emby"
+    override val label = "Emby/Jellyfin"
 
     private val tokenKeys = listOf(
         "api_key", "apikey", "api-token", "apitoken", "x-emby-token", "token", "X-Emby-Token",
@@ -31,8 +38,7 @@ class EmbyProvider : Provider {
     }
 
     override fun resolve(uri: Uri): ResolveResult {
-        val serverBase = (uri.scheme ?: "http") + "://" + (uri.authority
-            ?: throw ProviderException("Emby URL has no host"))
+        val serverBase = serverBase(uri)
         val token = findToken(uri)
             ?: throw ProviderException("Emby token not found in URL")
         val itemId = findItemId(uri)
@@ -50,15 +56,13 @@ class EmbyProvider : Provider {
         val userId = runCatching { client.userId() }.getOrDefault("")
         val info = client.item(userId, itemId)
 
-        val (channelId, messages) = parseDownloadUrl(info.path)
+        val stream = parseStrmStreamSpec(info.path)
 
         val runtimeMs = info.runtimeTicks / 10_000
-        val positionMs = info.positionTicks / 10_000
+        val positionMs = resolveStartPositionMs(uri.toString(), info.positionTicks)
 
         return ResolveResult(
-            stream = StreamSpec(
-                channelId = channelId,
-                messagesDash = messages,
+            stream = stream.copy(
                 title = info.name,
                 startPositionMs = positionMs,
                 durationMs = runtimeMs,
@@ -106,10 +110,26 @@ class EmbyProvider : Provider {
 
     companion object {
         private val itemMarkers = setOf("videos", "items", "item")
+        private val apiBaseMarkers = itemMarkers + "users"
         private val mediaExtensions = setOf(
             "mkv", "mp4", "m4v", "ts", "m3u8", "mpd", "avi", "mov", "webm",
             "strm", "mp3", "flac", "aac", "wav", "ogg", "m4a",
         )
+
+        fun serverBase(uri: Uri): String {
+            return serverBase(uri.scheme, uri.authority, uri.pathSegments)
+        }
+
+        fun serverBase(scheme: String?, authority: String?, pathSegments: List<String>): String {
+            val normalizedScheme = scheme ?: "http"
+            val normalizedAuthority = authority ?: throw ProviderException("Emby URL has no host")
+            val markerIndex = pathSegments.indexOfFirst { it.lowercase() in apiBaseMarkers }
+            val prefix = when {
+                markerIndex > 0 -> pathSegments.take(markerIndex).joinToString(prefix = "/", separator = "/")
+                else -> ""
+            }
+            return "$normalizedScheme://$normalizedAuthority$prefix"
+        }
 
         /**
          * Extracts the Emby/Jellyfin item id from URL path segments, e.g.
@@ -147,23 +167,71 @@ class EmbyProvider : Provider {
             if (s.length in 6..20 && s.all { it.isDigit() }) return true // long numeric id
             return false
         }
-    }
 
-    /** Parses http://IP:PORT/download/{ID}/{channel_id}/{m1-m2-...}. */
-    private fun parseDownloadUrl(raw: String): Pair<Long, String> {
-        if (raw.isBlank()) throw ProviderException("Emby: empty media path (.strm)")
-        val u = runCatching { Uri.parse(raw.trim()) }.getOrNull()
-            ?: throw ProviderException("Emby: .strm is not a valid URL: $raw")
-        val segs = u.pathSegments
-        val idx = segs.indexOfFirst { it.equals("download", ignoreCase = true) }
-        if (idx < 0 || idx + 3 > segs.size) {
-            throw ProviderException("Emby: unexpected .strm format: $raw")
+        fun parseStrmStreamSpec(raw: String): StreamSpec {
+            if (raw.isBlank()) throw ProviderException("Emby: empty media path (.strm)")
+            val u = runCatching { URI(raw.trim()) }.getOrNull()
+                ?: throw ProviderException("Emby: .strm is not a valid URL: $raw")
+
+            parseFragmentDirective(u.rawFragment)?.let { return it }
+
+            throw ProviderException("Emby: tgstream directive not found in .strm")
         }
-        val channelStr = segs[idx + 2]
-        val messages = segs[idx + 3]
-        val channelId = channelStr.toLongOrNull()
-            ?: throw ProviderException("Emby: non-numeric channel_id in .strm: $channelStr")
-        if (messages.isBlank()) throw ProviderException("Emby: missing message ids in .strm")
-        return channelId to messages
+
+        fun resolveStartPositionMs(launchUrl: String, savedPositionTicks: Long): Long {
+            val explicitTicks = launchStartTicks(launchUrl)
+            return (explicitTicks ?: savedPositionTicks).coerceAtLeast(0) / 10_000
+        }
+
+        private fun launchStartTicks(launchUrl: String): Long? {
+            val u = runCatching { URI(launchUrl.trim()) }.getOrNull() ?: return null
+            val params = queryParams(u.rawQuery ?: return null)
+            for (key in startTickKeys) {
+                val raw = params.entries
+                    .firstOrNull { it.key.equals(key, ignoreCase = true) }
+                    ?.value
+                    ?.trim()
+                    .orEmpty()
+                if (raw.isBlank()) continue
+                return raw.toLongOrNull()?.takeIf { it >= 0 }
+            }
+            return null
+        }
+
+        private fun queryParams(rawQuery: String): Map<String, String> {
+            val result = linkedMapOf<String, String>()
+            for (part in rawQuery.split('&')) {
+                if (part.isBlank()) continue
+                val key = part.substringBefore('=', "")
+                if (key.isBlank()) continue
+                result[decode(key)] = decode(part.substringAfter('=', ""))
+            }
+            return result
+        }
+
+        private fun parseFragmentDirective(fragment: String?): StreamSpec? {
+            if (fragment.isNullOrBlank()) return null
+            val parts = fragment.trim('/').split('/').filter { it.isNotBlank() }
+            if (parts.firstOrNull()?.equals("tgstream", ignoreCase = true) != true) return null
+            return when (parts.size) {
+                3 -> streamSpec(parts[1], parts[2])
+                else -> throw ProviderException("Emby: invalid tgstream directive")
+            }
+        }
+
+        private fun streamSpec(channelText: String, messagesText: String): StreamSpec {
+            val channelId = channelText.toLongOrNull()
+                ?: throw ProviderException("Emby: non-numeric channel_id in .strm: $channelText")
+            return DirectLinkCodec.parse(
+                "tgstream://play?channel=$channelId&messages=${messagesText.trim()}",
+            )
+        }
+
+        private fun decode(value: String): String = java.net.URLDecoder.decode(value, Charsets.UTF_8.name())
+
+        private val startTickKeys = listOf(
+            "StartTimeTicks",
+            "StartPositionTicks",
+        )
     }
 }

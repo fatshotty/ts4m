@@ -2,8 +2,9 @@ package net.fatshotty.tgstream.provider
 
 import android.net.Uri
 
-/** What to stream: a Telegram channel + ordered message-id parts. */
+/** What to stream: a stable logical id plus Telegram channel and message parts. */
 data class StreamSpec(
+    val streamId: String = "",
     val channelId: Long,
     val messagesDash: String, // e.g. "10-11"
     val title: String = "",
@@ -11,7 +12,7 @@ data class StreamSpec(
     val durationMs: Long = 0,
 )
 
-/** Where/how to report playback progress back to the source app (e.g. Emby). */
+/** Where/how to report playback progress back to the source app. */
 data class ReportingContext(
     val kind: String,          // "emby" or "none"
     val serverBase: String = "",
@@ -27,7 +28,7 @@ data class ResolveResult(
     val reporting: ReportingContext,
 )
 
-/** A source app integration (Emby first). */
+/** A source app integration. */
 interface Provider {
     val id: String
     val label: String

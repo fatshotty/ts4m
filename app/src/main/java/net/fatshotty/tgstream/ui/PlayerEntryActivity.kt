@@ -78,11 +78,12 @@ class PlayerEntryActivity : AppCompatActivity() {
         val conns = Settings.getConnections(this)
         val streamUrl = Tg.streamUrl(r.stream.channelId, r.stream.messagesDash, conns)
         AppLog.i(TAG, "stream url: ${AppLog.redactUrl(streamUrl)}")
-        // Resume position: an MX-style inbound `position` extra (ms) from the
-        // launcher (Stremio/Nuvio external-player path) wins; otherwise the value
-        // the provider resolved (e.g. Emby's saved position).
-        val startMs = inboundResumeMs().takeIf { it >= 0 } ?: r.stream.startPositionMs
-        AppLog.i(TAG, "start position: ${startMs}ms (inbound=${inboundResumeMs()}, provider=${r.stream.startPositionMs})")
+        // Resume position: source providers own their launch semantics. For
+        // direct/no-reporting launches, an MX-style inbound `position` extra can
+        // still resume external-player flows such as Stremio/Nuvio.
+        val inboundMs = inboundResumeMs()
+        val startMs = StartPositionResolver.choose(r.reporting.kind, inboundMs, r.stream.startPositionMs)
+        AppLog.i(TAG, "start position: ${startMs}ms (inbound=$inboundMs, provider=${r.stream.startPositionMs})")
         val playerClass = if (Settings.getPlayerEngine(this) == Settings.ENGINE_VLC)
             PlayerActivity::class.java else PlayerActivityExo::class.java
         val i = Intent(this, playerClass).apply {

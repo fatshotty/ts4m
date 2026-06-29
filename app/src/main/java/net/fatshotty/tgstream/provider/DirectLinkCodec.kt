@@ -46,9 +46,12 @@ object DirectLinkCodec {
             (seconds * 1000.0).roundToLong()
         }
 
+        val messages = normalizeMessages(messagesText)
+
         return StreamSpec(
+            streamId = streamId(channel, messages),
             channelId = channel,
-            messagesDash = normalizeMessages(messagesText),
+            messagesDash = messages,
             title = queryParam(query, "title"),
             startPositionMs = posMs,
         )
@@ -106,6 +109,9 @@ object DirectLinkCodec {
             n.toString()
         }
     }
+
+    fun streamId(channelId: Long, messagesDash: String): String =
+        "$channelId:${normalizeMessages(messagesDash)}"
 
     private fun decode(value: String): String = URLDecoder.decode(value, Charsets.UTF_8.name())
 

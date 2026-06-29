@@ -59,4 +59,102 @@ class EmbyProviderTest {
     @Test fun emptyPath() {
         assertNull(id("/"))
     }
+
+    @Test fun serverBaseKeepsEmbyPrefix() {
+        val base = EmbyProvider.serverBase(
+            scheme = "https",
+            authority = "media.example.com",
+            pathSegments = listOf("emby", "videos", "7", "stream.mkv"),
+        )
+
+        assertEquals("https://media.example.com/emby", base)
+    }
+
+    @Test fun serverBaseKeepsJellyfinPrefix() {
+        val base = EmbyProvider.serverBase(
+            scheme = "https",
+            authority = "media.example.com",
+            pathSegments = listOf("jellyfin", "Videos", "7", "stream.mkv"),
+        )
+
+        assertEquals("https://media.example.com/jellyfin", base)
+    }
+
+    @Test fun parsesFragmentDirectiveWithoutChangingPlayableUrl() {
+        val spec = EmbyProvider.parseStrmStreamSpec(
+            "http://172.17.0.1:3000/download/lvbrj3dna7/-1003847124457/10-11#tgstream/-1003847124457/10,11",
+        )
+
+        assertEquals("-1003847124457:10-11", spec.streamId)
+        assertEquals(-1003847124457L, spec.channelId)
+        assertEquals("10-11", spec.messagesDash)
+    }
+
+    @Test fun rejectsFragmentDirectiveWithExplicitStreamId() {
+        assertProviderError("Emby: invalid tgstream directive") {
+            EmbyProvider.parseStrmStreamSpec(
+                "https://cdn.example.com/movie.mkv#tgstream/movie-abc/-1003847124457/10-11",
+            )
+        }
+    }
+
+    @Test fun rejectsLegacyDownloadPathWithoutTgstreamDirective() {
+        assertProviderError("Emby: tgstream directive not found") {
+            EmbyProvider.parseStrmStreamSpec(
+                "http://server/download/lvbrj3dna7/-1003847124457/10-11?token=ignored",
+            )
+        }
+    }
+
+    @Test fun rejectsLoosePathWithoutTgstreamDirective() {
+        assertProviderError("Emby: tgstream directive not found") {
+            EmbyProvider.parseStrmStreamSpec(
+                "http://server/any/path/-1003847124457/10-11",
+            )
+        }
+    }
+
+    @Test fun rejectsStrmWithoutTgstreamCoordinates() {
+        assertProviderError("Emby: tgstream directive not found") {
+            EmbyProvider.parseStrmStreamSpec(
+                "https://cdn.example.com/movie.mkv#not-tgstream",
+            )
+        }
+    }
+
+    @Test fun explicitZeroStartTimeTicksOverridesSavedResumePosition() {
+        val startMs = EmbyProvider.resolveStartPositionMs(
+            "https://server/emby/videos/7/stream.mkv?StartTimeTicks=0&api_key=x",
+            savedPositionTicks = 900_000_000,
+        )
+
+        assertEquals(0L, startMs)
+    }
+
+    @Test fun explicitStartTimeTicksOverridesSavedResumePosition() {
+        val startMs = EmbyProvider.resolveStartPositionMs(
+            "https://server/emby/videos/7/stream.mkv?StartTimeTicks=905000000&api_key=x",
+            savedPositionTicks = 900_000_000,
+        )
+
+        assertEquals(90_500L, startMs)
+    }
+
+    @Test fun missingStartTimeTicksFallsBackToSavedResumePosition() {
+        val startMs = EmbyProvider.resolveStartPositionMs(
+            "https://server/emby/videos/7/stream.mkv?api_key=x",
+            savedPositionTicks = 900_000_000,
+        )
+
+        assertEquals(90_000L, startMs)
+    }
+
+    private fun assertProviderError(expectedPrefix: String, block: () -> Unit) {
+        try {
+            block()
+            throw AssertionError("Expected ProviderException")
+        } catch (e: ProviderException) {
+            org.junit.Assert.assertTrue("message=${e.message}", e.message?.startsWith(expectedPrefix) == true)
+        }
+    }
 }

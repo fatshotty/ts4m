@@ -12,6 +12,7 @@ class DirectProviderTest {
 
         assertEquals(-1001234567890L, stream.channelId)
         assertEquals("15-16-17", stream.messagesDash)
+        assertEquals("-1001234567890:15-16-17", stream.streamId)
         assertEquals(0L, stream.startPositionMs)
         assertEquals("", stream.title)
     }
