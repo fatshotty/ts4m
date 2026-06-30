@@ -23,6 +23,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
+import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
@@ -34,6 +35,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.SubtitleView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -74,6 +76,7 @@ class PlayerActivityExo : AppCompatActivity() {
 
     private var player: ExoPlayer? = null
     private var playerView: PlayerView? = null
+    private var subtitleView: SubtitleView? = null
     private var reporter: EmbyReporter? = null
     private var tvControls: TvPlayerControlsView? = null
     private var startMs: Long = 0
@@ -99,6 +102,7 @@ class PlayerActivityExo : AppCompatActivity() {
     private var lastBytes = 0L
     private var lastTickNs = 0L
     private var emaBps = 0.0
+    private var lastSubtitleCueCount = -1
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -139,7 +143,7 @@ class PlayerActivityExo : AppCompatActivity() {
             useController = false
             setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
             keepScreenOn = true
-            subtitleView?.setBottomPaddingFraction(0.18f)
+            subtitleView?.visibility = View.GONE
         }
         playerView = view
         root.addView(view)
@@ -158,6 +162,20 @@ class PlayerActivityExo : AppCompatActivity() {
                 onSeekKey = { forward, repeatCount -> onScrubKey(forward, repeatCount) },
             ),
         )
+
+        subtitleView = SubtitleView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            )
+            isClickable = false
+            isFocusable = false
+            setApplyEmbeddedStyles(true)
+            setUserDefaultStyle()
+            setUserDefaultTextSize()
+            setBottomPaddingFraction(0.22f)
+        }
+        root.addView(subtitleView)
 
         statsView = TextView(this).apply {
             setBackgroundColor(Color.argb(170, 0, 0, 0))
@@ -272,7 +290,16 @@ class PlayerActivityExo : AppCompatActivity() {
                 tvControls?.refresh()
             }
             override fun onTracksChanged(tracks: Tracks) {
+                AppLog.i(TAG, "tracks changed: ${describeTrackGroups(tracks)}")
                 tvControls?.refresh()
+            }
+            override fun onCues(cueGroup: CueGroup) {
+                val cues = cueGroup.cues
+                subtitleView?.setCues(cues)
+                if (cues.size != lastSubtitleCueCount) {
+                    lastSubtitleCueCount = cues.size
+                    AppLog.i(TAG, "subtitle cues: ${cues.size} (${selectedTextTrackLabel()})")
+                }
             }
             override fun onMetadata(metadata: Metadata) {
                 val parsedChapters = ExoChapterMetadata.extract(metadata)
@@ -505,6 +532,26 @@ class PlayerActivityExo : AppCompatActivity() {
             }
         }
         return "off"
+    }
+
+    private fun describeTrackGroups(tracks: Tracks): String {
+        var audio = 0
+        var text = 0
+        var video = 0
+        var unsupportedText = 0
+        tracks.groups.forEach { group ->
+            when (group.type) {
+                C.TRACK_TYPE_AUDIO -> audio += group.length
+                C.TRACK_TYPE_VIDEO -> video += group.length
+                C.TRACK_TYPE_TEXT -> {
+                    text += group.length
+                    for (trackIndex in 0 until group.length) {
+                        if (!group.isTrackSupported(trackIndex)) unsupportedText++
+                    }
+                }
+            }
+        }
+        return "audio=$audio video=$video text=$text unsupportedText=$unsupportedText selectedText=${selectedTextTrackLabel()}"
     }
 
     private inner class ExoTvPlayerAdapter : TvPlayerAdapter {
@@ -788,6 +835,8 @@ class PlayerActivityExo : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         scrubHandler.removeCallbacks(commitScrubRunnable)
+        subtitleView?.setCues(emptyList())
+        subtitleView = null
         playerView?.player = null
         player?.release()
         player = null
