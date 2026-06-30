@@ -79,7 +79,7 @@ func TestPoolNeedsResize(t *testing.T) {
 	}{
 		{"larger request grows the pool", 4, 8, true},
 		{"equal request reuses the pool", 4, 4, false},
-		{"smaller request reuses the pool", 4, 2, false},
+		{"smaller request shrinks the pool", 4, 2, true},
 		{"unknown existing max forces recreation", 0, 4, true},
 	}
 	for _, c := range cases {

@@ -24,7 +24,7 @@ const (
 
 	// buildTag is stamped on every stream request so the log unambiguously
 	// identifies the running engine build. Bump it on every engine change.
-	buildTag = "media-6"
+	buildTag = "media-7"
 )
 
 // proxyServer is the localhost HTTP server ExoPlayer streams from.
@@ -506,11 +506,11 @@ func pickConns(total int64, max int) int {
 
 // poolNeedsResize reports whether a cached media pool created with existingMax
 // connections must be recreated to honor a request for `requested` connections.
-// We only grow pools (requested > existingMax): shrinking would needlessly tear
-// down healthy in-use connections, and the larger pool already serves smaller
-// requests fine (the per-stream `conns` still bounds in-flight chunks).
+// The per-stream pipeline already bounds in-flight chunks, but resizing the
+// cached pool down avoids keeping excess gotd connections alive after switching
+// from a large file to a smaller one.
 func poolNeedsResize(existingMax, requested int64) bool {
-	return requested > existingMax
+	return existingMax != requested
 }
 
 // mediaClient returns (and caches) a tg.Client bound to a pool of up to `conns`
@@ -535,10 +535,9 @@ func (e *Engine) mediaClient(ctx context.Context, dcID, conns int) (*tg.Client, 
 		if !poolNeedsResize(e.mediaMax[dcID], max) {
 			return c, nil
 		}
-		// The connection setting was raised since this DC's pool was first built,
-		// so the cached pool capped concurrency below the new value. Tear it down
-		// and recreate at the larger size. In-flight chunks on the old pool finish
-		// against the closing invoker; new chunks use the resized pool.
+		// The target connection count changed since this DC's pool was first built.
+		// Tear it down and recreate at the requested size so the pool can both grow
+		// for large files and shrink after returning to smaller files.
 		logI("resizing media pool dc=%d from %d to %d conns", dcID, e.mediaMax[dcID], max)
 		_ = e.mediaInv[dcID].Close()
 		delete(e.mediaAPI, dcID)
