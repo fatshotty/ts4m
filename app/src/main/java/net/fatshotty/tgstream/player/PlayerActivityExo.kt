@@ -41,6 +41,7 @@ import net.fatshotty.tgstream.data.Settings
 import net.fatshotty.tgstream.emby.EmbyReporter
 import net.fatshotty.tgstream.player.controls.PlayerOption
 import net.fatshotty.tgstream.player.controls.PlayerOptionKind
+import net.fatshotty.tgstream.player.controls.TouchPlaybackOverlay
 import net.fatshotty.tgstream.player.controls.TvPlayerAdapter
 import net.fatshotty.tgstream.player.controls.TvPlayerControlsView
 import net.fatshotty.tgstream.tg.Tg
@@ -138,18 +139,25 @@ class PlayerActivityExo : AppCompatActivity() {
             useController = false
             setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
             keepScreenOn = true
+            subtitleView?.setBottomPaddingFraction(0.18f)
         }
         playerView = view
         root.addView(view)
 
-        val catcher = View(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT,
-            )
-            setOnClickListener { tvControls?.showAndFocus() }
-        }
-        root.addView(catcher)
+        val controlsAdapter = ExoTvPlayerAdapter()
+        tvControls = TvPlayerControlsView(
+            context = this,
+            adapter = controlsAdapter,
+            onSeekKey = { forward, repeatCount -> onScrubKey(forward, repeatCount) },
+        )
+        root.addView(
+            TouchPlaybackOverlay(
+                context = this,
+                adapter = controlsAdapter,
+                controls = { tvControls },
+                onSeekKey = { forward, repeatCount -> onScrubKey(forward, repeatCount) },
+            ),
+        )
 
         statsView = TextView(this).apply {
             setBackgroundColor(Color.argb(170, 0, 0, 0))
@@ -165,11 +173,6 @@ class PlayerActivityExo : AppCompatActivity() {
         }
         root.addView(statsView)
 
-        tvControls = TvPlayerControlsView(
-            context = this,
-            adapter = ExoTvPlayerAdapter(),
-            onSeekKey = { forward, repeatCount -> onScrubKey(forward, repeatCount) },
-        )
         root.addView(tvControls)
 
         setContentView(root)
@@ -472,6 +475,7 @@ class PlayerActivityExo : AppCompatActivity() {
             if (!it.language.isNullOrBlank()) parts.append(" [${it.language}]")
             sb.append("Audio codec: ").append(parts).append('\n')
         }
+        sb.append("Subtitle track: ").append(selectedTextTrackLabel()).append('\n')
         sb.append("Video bitrate: ").append(humanRate(videoBitrate.toDouble()))
             .append(if (fromExo) " (decoder)" else " (media)").append('\n')
         sb.append("Live bandwidth: ").append(humanRate(liveBps)).append('\n')
@@ -482,6 +486,25 @@ class PlayerActivityExo : AppCompatActivity() {
         sb.append("Parallel connections: ").append(conns).append('\n')
         sb.append("Position: ").append(fmtTime(p.currentPosition)).append(" / ").append(fmtTime(p.duration))
         statsView?.text = sb
+    }
+
+    private fun selectedTextTrackLabel(): String {
+        val p = player ?: return "-"
+        p.currentTracks.groups.forEach { group ->
+            if (group.type == C.TRACK_TYPE_TEXT) {
+                for (trackIndex in 0 until group.length) {
+                    if (group.isTrackSelected(trackIndex)) {
+                        val format = group.getTrackFormat(trackIndex)
+                        return listOf(
+                            format.label.orEmpty(),
+                            format.language.orEmpty(),
+                            format.sampleMimeType ?: format.codecs.orEmpty(),
+                        ).filter { it.isNotBlank() }.joinToString(" / ").ifBlank { "selected" }
+                    }
+                }
+            }
+        }
+        return "off"
     }
 
     private inner class ExoTvPlayerAdapter : TvPlayerAdapter {
@@ -583,6 +606,10 @@ class PlayerActivityExo : AppCompatActivity() {
                     ),
                 )
             p.trackSelectionParameters = builder.build()
+            if (kind == PlayerOptionKind.SUBTITLE) {
+                val format = group.getTrackFormat(trackId.trackIndex)
+                AppLog.i(TAG, "selected subtitle: ${format.label ?: format.language ?: format.sampleMimeType ?: id}")
+            }
             tvControls?.refresh()
         }
 

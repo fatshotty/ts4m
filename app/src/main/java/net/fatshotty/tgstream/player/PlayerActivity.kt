@@ -24,6 +24,7 @@ import kotlinx.coroutines.launch
 import net.fatshotty.tgstream.emby.EmbyReporter
 import net.fatshotty.tgstream.player.controls.PlayerOption
 import net.fatshotty.tgstream.player.controls.PlayerOptionKind
+import net.fatshotty.tgstream.player.controls.TouchPlaybackOverlay
 import net.fatshotty.tgstream.player.controls.TvPlayerAdapter
 import net.fatshotty.tgstream.player.controls.TvPlayerControlsView
 import net.fatshotty.tgstream.tg.Tg
@@ -179,14 +180,20 @@ class PlayerActivity : AppCompatActivity() {
         videoLayout = video
         root.addView(video)
 
-        // Transparent catcher to toggle controls on tap (above video, below bars).
-        val catcher = View(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
-            )
-            setOnClickListener { tvControls?.showAndFocus() }
-        }
-        root.addView(catcher)
+        val controlsAdapter = VlcTvPlayerAdapter()
+        tvControls = TvPlayerControlsView(
+            context = this,
+            adapter = controlsAdapter,
+            onSeekKey = { forward, repeatCount -> onScrubKey(forward, repeatCount) },
+        )
+        root.addView(
+            TouchPlaybackOverlay(
+                context = this,
+                adapter = controlsAdapter,
+                controls = { tvControls },
+                onSeekKey = { forward, repeatCount -> onScrubKey(forward, repeatCount) },
+            ),
+        )
 
         statsView = TextView(this).apply {
             setBackgroundColor(Color.argb(170, 0, 0, 0))
@@ -201,11 +208,6 @@ class PlayerActivity : AppCompatActivity() {
         }
         root.addView(statsView)
 
-        tvControls = TvPlayerControlsView(
-            context = this,
-            adapter = VlcTvPlayerAdapter(),
-            onSeekKey = { forward, repeatCount -> onScrubKey(forward, repeatCount) },
-        )
         root.addView(tvControls)
 
         setContentView(root)

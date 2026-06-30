@@ -1,32 +1,35 @@
 package net.fatshotty.tgstream.player.controls
 
 import android.content.Context
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.StateListDrawable
 import android.graphics.Color
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
+import androidx.annotation.DrawableRes
+import net.fatshotty.tgstream.R
 
 class TvPlayerControlsView(
     context: Context,
     private val adapter: TvPlayerAdapter,
     private val onSeekKey: (forward: Boolean, repeatCount: Int) -> Unit,
 ) : FrameLayout(context) {
-    private val playPauseButton = controlButton("Play")
-    private val seekBackButton = controlButton("-10s")
-    private val seekForwardButton = controlButton("+10s")
-    private val audioButton = controlButton("Audio")
-    private val subtitlesButton = controlButton("Subtitles")
-    private val videoButton = controlButton("Video")
-    private val chaptersButton = controlButton("Chapters")
-    private val statsButton = controlButton("Stats").apply {
-        minWidth = dp(104)
-    }
+    private val playPauseButton = controlButton(R.drawable.ic_player_play, "Play")
+    private val seekBackButton = controlButton(R.drawable.ic_player_rewind, "Back 10 seconds")
+    private val seekForwardButton = controlButton(R.drawable.ic_player_forward, "Forward 10 seconds")
+    private val audioButton = controlButton(R.drawable.ic_player_audio, "Audio")
+    private val subtitlesButton = controlButton(R.drawable.ic_player_subtitles, "Subtitles")
+    private val videoButton = controlButton(R.drawable.ic_player_video, "Video")
+    private val chaptersButton = controlButton(R.drawable.ic_player_chapters, "Chapters")
+    private val statsButton = controlButton(R.drawable.ic_player_stats, "Stats")
     private val positionView = timeTextView()
     private val durationView = timeTextView()
     private val consumedKeyCodes = mutableSetOf<Int>()
@@ -73,8 +76,8 @@ class TvPlayerControlsView(
             LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setBackgroundColor(Color.argb(224, 0, 0, 0))
-                setPadding(dp(16), dp(12), dp(16), dp(12))
+                setBackgroundColor(Color.argb(196, 0, 0, 0))
+                setPadding(dp(18), dp(10), dp(18), dp(10))
 
                 addView(playPauseButton)
                 addView(seekBackButton)
@@ -220,11 +223,15 @@ class TvPlayerControlsView(
             chapters = chapterOptions,
         )
 
-        playPauseButton.text = if (adapter.isPlaying()) "Pause" else "Play"
+        playPauseButton.setImageResource(
+            if (adapter.isPlaying()) R.drawable.ic_player_pause else R.drawable.ic_player_play,
+        )
+        playPauseButton.contentDescription = if (adapter.isPlaying()) "Pause" else "Play"
         positionView.text = formatTime(adapter.positionMs())
         durationView.text = formatTime(adapter.durationMs())
         updateSeekBar()
-        statsButton.text = if (adapter.isStatsVisible()) "Hide Stats" else "Stats"
+        statsButton.contentDescription = if (adapter.isStatsVisible()) "Hide stats" else "Show stats"
+        statsButton.isSelected = adapter.isStatsVisible()
 
         audioButton.visibility = if (controlVisibility.audio) View.VISIBLE else View.GONE
         subtitlesButton.visibility = if (controlVisibility.subtitles) View.VISIBLE else View.GONE
@@ -251,7 +258,7 @@ class TvPlayerControlsView(
         refresh()
     }
 
-    private fun seekFromButton(forward: Boolean, button: Button) {
+    private fun seekFromButton(forward: Boolean, button: ImageButton) {
         onSeekKey(forward, 0)
         refresh()
         button.requestFocus()
@@ -271,7 +278,7 @@ class TvPlayerControlsView(
         title: String,
         kind: PlayerOptionKind,
         options: List<PlayerOption>,
-        invokingButton: Button,
+        invokingButton: ImageButton,
     ) {
         if (options.none { it.enabled }) return
 
@@ -292,7 +299,7 @@ class TvPlayerControlsView(
         }
     }
 
-    private fun optionButtons(): List<Button> {
+    private fun optionButtons(): List<ImageButton> {
         return listOf(audioButton, subtitlesButton, videoButton, chaptersButton)
     }
 
@@ -322,22 +329,42 @@ class TvPlayerControlsView(
         super.onDetachedFromWindow()
     }
 
-    private fun controlButton(label: String): Button {
-        return Button(context).apply {
-            text = label
-            isAllCaps = false
+    private fun controlButton(@DrawableRes iconRes: Int, label: String): ImageButton {
+        return ImageButton(context).apply {
+            setImageResource(iconRes)
+            contentDescription = label
+            background = controlButtonBackground()
+            setColorFilter(Color.WHITE)
+            scaleType = ImageView.ScaleType.CENTER
             isFocusable = true
-            minWidth = dp(64)
-            minHeight = dp(44)
-            setPadding(dp(10), 0, dp(10), 0)
-            textSize = 14f
+            isClickable = true
+            minimumWidth = dp(50)
+            minimumHeight = dp(46)
+            setPadding(dp(11), dp(9), dp(11), dp(9))
             layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
+                dp(54),
+                dp(48),
             ).apply {
-                marginStart = dp(3)
-                marginEnd = dp(3)
+                marginStart = dp(4)
+                marginEnd = dp(4)
             }
+        }
+    }
+
+    private fun controlButtonBackground(): StateListDrawable {
+        return StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_focused), roundedColor(Color.argb(230, 42, 95, 145)))
+            addState(intArrayOf(android.R.attr.state_selected), roundedColor(Color.argb(205, 70, 70, 70)))
+            addState(intArrayOf(android.R.attr.state_pressed), roundedColor(Color.argb(235, 62, 122, 184)))
+            addState(intArrayOf(), roundedColor(Color.argb(72, 255, 255, 255)))
+        }
+    }
+
+    private fun roundedColor(color: Int): GradientDrawable {
+        return GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(24).toFloat()
+            setColor(color)
         }
     }
 
