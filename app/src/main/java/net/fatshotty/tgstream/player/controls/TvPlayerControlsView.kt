@@ -33,6 +33,7 @@ class TvPlayerControlsView(
     private val positionView = timeTextView()
     private val durationView = timeTextView()
     private val consumedKeyCodes = mutableSetOf<Int>()
+    private var seekBarScrubbing = false
     private val seekBar = SeekBar(context).apply {
         isFocusable = true
         max = SEEK_BAR_MAX
@@ -60,6 +61,12 @@ class TvPlayerControlsView(
                 scheduleAutoHide()
             }
         })
+        setOnFocusChangeListener { _, hasFocus ->
+            if (!hasFocus) {
+                seekBarScrubbing = false
+                isSelected = false
+            }
+        }
     }
     private val hideRunnable = Runnable { hide() }
 
@@ -132,6 +139,30 @@ class TvPlayerControlsView(
         if (event.action == KeyEvent.ACTION_UP && consumedKeyCodes.remove(event.keyCode)) {
             return true
         }
+        if (event.action == KeyEvent.ACTION_DOWN && seekBar.hasFocus()) {
+            if (event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER) {
+                setSeekBarScrubbing(!seekBarScrubbing)
+                consumedKeyCodes.add(event.keyCode)
+                return true
+            }
+            if (event.keyCode == KeyEvent.KEYCODE_BACK && seekBarScrubbing) {
+                setSeekBarScrubbing(false)
+                consumedKeyCodes.add(event.keyCode)
+                return true
+            }
+            if (!seekBarScrubbing && event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                seekBackButton.requestFocus()
+                scheduleAutoHide()
+                consumedKeyCodes.add(event.keyCode)
+                return true
+            }
+            if (!seekBarScrubbing && event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                seekForwardButton.requestFocus()
+                scheduleAutoHide()
+                consumedKeyCodes.add(event.keyCode)
+                return true
+            }
+        }
 
         val consumed = when (
             PlaybackKeyPolicy.actionFor(
@@ -139,6 +170,7 @@ class TvPlayerControlsView(
                 action = event.action,
                 controlsVisible = visibility == View.VISIBLE,
                 seekFocused = seekBar.hasFocus(),
+                seekScrubbing = seekBarScrubbing,
             )
         ) {
             PlaybackKeyAction.SHOW_CONTROLS -> {
@@ -200,6 +232,7 @@ class TvPlayerControlsView(
     fun showAndFocus() {
         visibility = View.VISIBLE
         bringToFront()
+        setSeekBarScrubbing(false)
         refresh()
         playPauseButton.requestFocus()
         scheduleAutoHide()
@@ -207,6 +240,7 @@ class TvPlayerControlsView(
 
     fun hide() {
         removeCallbacks(hideRunnable)
+        setSeekBarScrubbing(false)
         visibility = View.GONE
     }
 
@@ -272,6 +306,12 @@ class TvPlayerControlsView(
         refresh()
         seekBar.requestFocus()
         scheduleAutoHide()
+    }
+
+    private fun setSeekBarScrubbing(scrubbing: Boolean) {
+        seekBarScrubbing = scrubbing
+        seekBar.isSelected = scrubbing
+        if (scrubbing) removeCallbacks(hideRunnable) else scheduleAutoHide()
     }
 
     private fun openOptions(

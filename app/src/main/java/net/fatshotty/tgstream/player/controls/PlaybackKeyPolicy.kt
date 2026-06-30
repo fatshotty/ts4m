@@ -22,6 +22,7 @@ object PlaybackKeyPolicy {
         action: Int,
         controlsVisible: Boolean,
         seekFocused: Boolean,
+        seekScrubbing: Boolean = false,
     ): PlaybackKeyAction {
         if (action != KeyEvent.ACTION_DOWN) return PlaybackKeyAction.IGNORE
         return when (keyCode) {
@@ -30,7 +31,7 @@ object PlaybackKeyPolicy {
             KeyEvent.KEYCODE_MEDIA_PLAY -> PlaybackKeyAction.PLAY
             KeyEvent.KEYCODE_MEDIA_PAUSE -> PlaybackKeyAction.PAUSE
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> PlaybackKeyAction.TOGGLE_PLAY
-            KeyEvent.KEYCODE_DPAD_LEFT -> if (controlsVisible && seekFocused) {
+            KeyEvent.KEYCODE_DPAD_LEFT -> if (controlsVisible && seekFocused && seekScrubbing) {
                 PlaybackKeyAction.SCRUB_BACK
             } else if (!controlsVisible) {
                 PlaybackKeyAction.SCRUB_BACK
@@ -38,7 +39,7 @@ object PlaybackKeyPolicy {
                 PlaybackKeyAction.IGNORE
             }
             KeyEvent.KEYCODE_MEDIA_REWIND -> PlaybackKeyAction.SCRUB_BACK
-            KeyEvent.KEYCODE_DPAD_RIGHT -> if (controlsVisible && seekFocused) {
+            KeyEvent.KEYCODE_DPAD_RIGHT -> if (controlsVisible && seekFocused && seekScrubbing) {
                 PlaybackKeyAction.SCRUB_FORWARD
             } else if (!controlsVisible) {
                 PlaybackKeyAction.SCRUB_FORWARD

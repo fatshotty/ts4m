@@ -20,11 +20,12 @@ import androidx.media3.exoplayer.upstream.Allocator
  *
  *   0-10s   -> LOW    (fast startup, little memory committed)
  *   10-20s  -> HIGH
- *   20s+    -> VHIGH  (full stability for high-bitrate, e.g. ~80 Mb/s, streams)
+ *   20s+    -> VHIGH  (full stability within the device-safe heap cap)
  *
  * Below the minimum playable buffer we always keep loading (anti-stall), regardless
- * of the current cap. Everything else delegates to a [DefaultLoadControl] sized at
- * the VHIGH ceiling, so allocator/back-buffer/start-playback behaviour is unchanged.
+ * of the current cap. Keep that minimum short: this buffer is Java heap, and large
+ * high-bitrate MKV files can exhaust a 32-bit Android TV heap if the time floor is
+ * allowed to dominate the byte cap.
  *
  * Note: libVLC's network cache is fixed at media init and cannot be resized live, so
  * this dynamic ramp is ExoPlayer-only (libVLC uses a fixed tier — see [BufferTuning]).
@@ -129,7 +130,7 @@ class DynamicLoadControl(
     ): Boolean = inner.shouldContinuePreloading(timeline, mediaPeriodId, bufferedDurationUs)
 
     private companion object {
-        const val MIN_BUFFER_MS = 15_000
+        const val MIN_BUFFER_MS = 2_500
         const val MAX_BUFFER_MS = 300_000
         const val RAMP_TO_HIGH_MS = 10_000L
         const val RAMP_TO_VHIGH_MS = 20_000L

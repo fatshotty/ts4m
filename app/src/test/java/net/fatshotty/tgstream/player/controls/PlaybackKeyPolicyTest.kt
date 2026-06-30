@@ -16,7 +16,7 @@ class PlaybackKeyPolicyTest {
         assertEquals(PlaybackKeyAction.SHOW_CONTROLS, action)
     }
 
-    @Test fun leftScrubsWhenSeekBarFocused() {
+    @Test fun leftDoesNotTrapFocusWhenSeekBarFocusedButNotScrubbing() {
         val action = PlaybackKeyPolicy.actionFor(
             keyCode = KeyEvent.KEYCODE_DPAD_LEFT,
             action = KeyEvent.ACTION_DOWN,
@@ -24,7 +24,42 @@ class PlaybackKeyPolicyTest {
             seekFocused = true,
         )
 
+        assertEquals(PlaybackKeyAction.IGNORE, action)
+    }
+
+    @Test fun rightDoesNotTrapFocusWhenSeekBarFocusedButNotScrubbing() {
+        val action = PlaybackKeyPolicy.actionFor(
+            keyCode = KeyEvent.KEYCODE_DPAD_RIGHT,
+            action = KeyEvent.ACTION_DOWN,
+            controlsVisible = true,
+            seekFocused = true,
+        )
+
+        assertEquals(PlaybackKeyAction.IGNORE, action)
+    }
+
+    @Test fun leftScrubsWhenSeekBarFocusedAndScrubbing() {
+        val action = PlaybackKeyPolicy.actionFor(
+            keyCode = KeyEvent.KEYCODE_DPAD_LEFT,
+            action = KeyEvent.ACTION_DOWN,
+            controlsVisible = true,
+            seekFocused = true,
+            seekScrubbing = true,
+        )
+
         assertEquals(PlaybackKeyAction.SCRUB_BACK, action)
+    }
+
+    @Test fun rightScrubsWhenSeekBarFocusedAndScrubbing() {
+        val action = PlaybackKeyPolicy.actionFor(
+            keyCode = KeyEvent.KEYCODE_DPAD_RIGHT,
+            action = KeyEvent.ACTION_DOWN,
+            controlsVisible = true,
+            seekFocused = true,
+            seekScrubbing = true,
+        )
+
+        assertEquals(PlaybackKeyAction.SCRUB_FORWARD, action)
     }
 
     @Test fun leftStartsScrubbingWhenControlsHidden() {

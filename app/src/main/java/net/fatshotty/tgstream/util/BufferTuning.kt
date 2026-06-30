@@ -30,6 +30,18 @@ object BufferTuning {
     }
 
     /**
+     * ExoPlayer allocates its progressive media buffer on the Java heap. Keep a
+     * large reserve for app/runtime objects and subtitle samples, especially on
+     * 32-bit TV boxes where largeHeap is commonly around 384 MB.
+     */
+    fun exoBytesForHeap(tier: Tier, maxHeapBytes: Long = Runtime.getRuntime().maxMemory()): Int {
+        val requested = exoBytes(tier)
+        val safeCap = (maxHeapBytes * 35 / 100).toInt()
+            .coerceAtLeast(exoBytes(Tier.LOW))
+        return requested.coerceAtMost(safeCap)
+    }
+
+    /**
      * libVLC network-caching in ms for a tier (native memory; also startup latency
      * and post-seek refill wait — libVLC resumes only once the buffer hits 100% of
      * this). These are the v0.1.20 values: a larger cache gives noticeably smoother

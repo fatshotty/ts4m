@@ -22,6 +22,7 @@ import androidx.media3.common.Metadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences
 import androidx.media3.common.Tracks
 import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
@@ -103,6 +104,7 @@ class PlayerActivityExo : AppCompatActivity() {
     private var lastTickNs = 0L
     private var emaBps = 0.0
     private var lastSubtitleCueCount = -1
+    private var exoVhighBytes = BufferTuning.exoBytes(BufferTuning.Tier.VHIGH)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -222,16 +224,26 @@ class PlayerActivityExo : AppCompatActivity() {
         // cap alone governs depth. (DynamicLoadControl is safe — its anti-stall clause
         // keeps loading below its minimum regardless of the ramped cap.)
         val minBufferMs = 2_500
+        val maxHeapBytes = Runtime.getRuntime().maxMemory()
+        val lowBytes = BufferTuning.exoBytesForHeap(BufferTuning.Tier.LOW, maxHeapBytes)
+        val highBytes = BufferTuning.exoBytesForHeap(BufferTuning.Tier.HIGH, maxHeapBytes)
+        val vhighBytes = BufferTuning.exoBytesForHeap(BufferTuning.Tier.VHIGH, maxHeapBytes)
+        exoVhighBytes = vhighBytes
+        AppLog.i(
+            TAG,
+            "exo buffer caps: low=${humanSize(lowBytes.toLong())} high=${humanSize(highBytes.toLong())} " +
+                "vhigh=${humanSize(vhighBytes.toLong())} heap=${humanSize(maxHeapBytes)}",
+        )
         val loadControl = if (bufferMode == Settings.BUFFER_DYNAMIC) {
             DynamicLoadControl(
-                lowBytes = BufferTuning.exoBytes(BufferTuning.Tier.LOW),
-                highBytes = BufferTuning.exoBytes(BufferTuning.Tier.HIGH),
-                vhighBytes = BufferTuning.exoBytes(BufferTuning.Tier.VHIGH),
+                lowBytes = lowBytes,
+                highBytes = highBytes,
+                vhighBytes = vhighBytes,
             ).also { dynamicLoadControl = it; applyStartBuffer() }
         } else {
             DefaultLoadControl.Builder()
                 .setBufferDurationsMs(minBufferMs, 300_000, 1_000, 2_000)
-                .setTargetBufferBytes(BufferTuning.exoBytes(BufferTuning.tierForMode(bufferMode)))
+                .setTargetBufferBytes(BufferTuning.exoBytesForHeap(BufferTuning.tierForMode(bufferMode), maxHeapBytes))
                 .setPrioritizeTimeOverSizeThresholds(false)
                 .build()
         }
@@ -245,6 +257,14 @@ class PlayerActivityExo : AppCompatActivity() {
             .build()
         // Snap to nearest keyframe — far less to download/decode after a seek.
         exo.setSeekParameters(SeekParameters.CLOSEST_SYNC)
+        exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+            .setAudioOffloadPreferences(
+                AudioOffloadPreferences.Builder()
+                    .setAudioOffloadMode(AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED)
+                    .build(),
+            )
+            .build()
+        AppLog.i(TAG, "audio offload: disabled")
         player = exo
         view.player = exo
 
@@ -365,7 +385,7 @@ class PlayerActivityExo : AppCompatActivity() {
         // large fixed value at high bitrate could never be reached → never starts.
         if (total > 0 && dur > 0) {
             val bytesPerSec = total.toDouble() / (dur / 1000.0)
-            val maxMs = 0.85 * BufferTuning.exoBytes(BufferTuning.Tier.VHIGH) / bytesPerSec * 1000.0
+            val maxMs = 0.85 * exoVhighBytes / bytesPerSec * 1000.0
             if (ms > maxMs) ms = maxMs
         }
         dlc.startBufferUs = (ms * 1000).toLong()
