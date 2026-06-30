@@ -25,16 +25,23 @@ import net.fatshotty.tgstream.util.AppLog
  * Must never crash — failures end with a toast and finish().
  */
 class PlayerEntryActivity : AppCompatActivity() {
+    private var playerLaunched = false
 
     private val playerResultLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
+        playerLaunched = false
         setResult(result.resultCode, result.data)
         finish()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        playerLaunched = savedInstanceState?.getBoolean(STATE_PLAYER_LAUNCHED) == true
+        if (playerLaunched) {
+            AppLog.i(TAG, "Player already launched; waiting for result")
+            return
+        }
 
         // Fresh log per playback so the screen shows only this session.
         AppLog.clear()
@@ -79,6 +86,11 @@ class PlayerEntryActivity : AppCompatActivity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean(STATE_PLAYER_LAUNCHED, playerLaunched)
+        super.onSaveInstanceState(outState)
+    }
+
     private fun launchPlayer(r: ResolveResult, source: String) {
         val conns = Settings.getConnections(this)
         val streamUrl = Tg.streamUrl(r.stream.channelId, r.stream.messagesDash, conns)
@@ -120,6 +132,7 @@ class PlayerEntryActivity : AppCompatActivity() {
         }
         // Launch for result so the player's MX-style result intent
         // (position/duration/end_by) can be relayed back to whoever launched us.
+        playerLaunched = true
         playerResultLauncher.launch(i)
     }
 
@@ -146,5 +159,6 @@ class PlayerEntryActivity : AppCompatActivity() {
     companion object {
         const val EXTRA_HISTORY_SOURCE = "history_source"
         private const val TAG = "TgStream"
+        private const val STATE_PLAYER_LAUNCHED = "player_launched"
     }
 }
