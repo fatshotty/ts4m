@@ -9,6 +9,8 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import net.fatshotty.tgstream.data.PlaybackHistoryItem
+import net.fatshotty.tgstream.data.PlaybackHistoryStore
 import net.fatshotty.tgstream.data.Settings
 import net.fatshotty.tgstream.player.PlayerActivity
 import net.fatshotty.tgstream.player.PlayerActivityExo
@@ -55,6 +57,9 @@ class PlayerEntryActivity : AppCompatActivity() {
             try {
                 val provider = ProviderRegistry.candidates(uri).firstOrNull()
                     ?: throw IllegalStateException("Unsupported URL")
+                val source = intent.getStringExtra(EXTRA_HISTORY_SOURCE)
+                    ?.takeIf { it.isNotBlank() }
+                    ?: provider.id
 
                 val result: ResolveResult = withContext(Dispatchers.IO) { provider.resolve(uri) }
 
@@ -63,7 +68,7 @@ class PlayerEntryActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                launchPlayer(result)
+                launchPlayer(result, source)
                 // Do NOT finish here: stay alive invisibly behind the player so we
                 // can relay its result intent (MX-style position/duration) back to the
                 // external launcher (Stremio/Nuvio) through playerResultLauncher.
@@ -74,7 +79,7 @@ class PlayerEntryActivity : AppCompatActivity() {
         }
     }
 
-    private fun launchPlayer(r: ResolveResult) {
+    private fun launchPlayer(r: ResolveResult, source: String) {
         val conns = Settings.getConnections(this)
         val streamUrl = Tg.streamUrl(r.stream.channelId, r.stream.messagesDash, conns)
         AppLog.i(TAG, "stream url: ${AppLog.redactUrl(streamUrl)}")
@@ -84,6 +89,17 @@ class PlayerEntryActivity : AppCompatActivity() {
         val inboundMs = inboundResumeMs()
         val startMs = StartPositionResolver.choose(r.reporting.kind, inboundMs, r.stream.startPositionMs)
         AppLog.i(TAG, "start position: ${startMs}ms (inbound=$inboundMs, provider=${r.stream.startPositionMs})")
+        PlaybackHistoryStore.record(
+            this,
+            PlaybackHistoryItem(
+                channelId = r.stream.channelId,
+                messagesDash = r.stream.messagesDash,
+                title = r.stream.title,
+                source = source,
+                lastPlayedAtMs = System.currentTimeMillis(),
+                startPositionMs = startMs,
+            ),
+        )
         val playerClass = if (Settings.getPlayerEngine(this) == Settings.ENGINE_VLC)
             PlayerActivity::class.java else PlayerActivityExo::class.java
         val i = Intent(this, playerClass).apply {
@@ -127,7 +143,8 @@ class PlayerEntryActivity : AppCompatActivity() {
         finish()
     }
 
-    private companion object {
-        const val TAG = "TgStream"
+    companion object {
+        const val EXTRA_HISTORY_SOURCE = "history_source"
+        private const val TAG = "TgStream"
     }
 }
