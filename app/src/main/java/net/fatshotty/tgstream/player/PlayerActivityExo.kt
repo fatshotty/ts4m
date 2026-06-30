@@ -9,19 +9,20 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
-import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.media3.common.C
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Metadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
@@ -38,6 +39,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import net.fatshotty.tgstream.data.Settings
 import net.fatshotty.tgstream.emby.EmbyReporter
+import net.fatshotty.tgstream.player.controls.PlayerOption
+import net.fatshotty.tgstream.player.controls.PlayerOptionKind
+import net.fatshotty.tgstream.player.controls.TvPlayerAdapter
+import net.fatshotty.tgstream.player.controls.TvPlayerControlsView
 import net.fatshotty.tgstream.tg.Tg
 import net.fatshotty.tgstream.util.AppLog
 import net.fatshotty.tgstream.util.BufferTuning
@@ -49,7 +54,7 @@ import java.util.concurrent.atomic.AtomicLong
 /**
  * ExoPlayer/Media3 player engine (default). Great HDR/Dolby Vision support via the
  * platform decoder. Streams from the localhost Go proxy and reports to Emby. Uses
- * Media3's built-in controller (D-pad friendly); nerd-stats overlay via D-pad UP.
+ * shared TV controls for playback, seeking, track selection, and stats.
  * For containers ExoPlayer can't handle (e.g. large OpenDML AVI) the user can
  * switch to the libVLC engine ([PlayerActivity]) in Settings.
  *
@@ -69,15 +74,13 @@ class PlayerActivityExo : AppCompatActivity() {
     private var player: ExoPlayer? = null
     private var playerView: PlayerView? = null
     private var reporter: EmbyReporter? = null
+    private var tvControls: TvPlayerControlsView? = null
     private var startMs: Long = 0
     private var startReported = false
+    private var exoChapters: List<ExoChapter> = emptyList()
 
     // scrub (D-pad seek preview): the bar moves while pressing, the actual seek
     // is committed once the user stops (debounced).
-    private var scrubOverlay: View? = null
-    private var scrubBar: ProgressBar? = null
-    private var scrubPosLabel: TextView? = null
-    private var scrubDurLabel: TextView? = null
     private var scrubbing = false
     private var scrubTargetMs = 0L
     private val scrubHandler = Handler(Looper.getMainLooper())
@@ -132,13 +135,21 @@ class PlayerActivityExo : AppCompatActivity() {
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT,
             )
-            useController = true
-            controllerShowTimeoutMs = 3500
+            useController = false
             setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
             keepScreenOn = true
         }
         playerView = view
         root.addView(view)
+
+        val catcher = View(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            )
+            setOnClickListener { tvControls?.showAndFocus() }
+        }
+        root.addView(catcher)
 
         statsView = TextView(this).apply {
             setBackgroundColor(Color.argb(170, 0, 0, 0))
@@ -154,44 +165,12 @@ class PlayerActivityExo : AppCompatActivity() {
         }
         root.addView(statsView)
 
-        val infoBtn = Button(this).apply {
-            text = "ⓘ"
-            isFocusable = true
-            alpha = 0.6f
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { gravity = Gravity.TOP or Gravity.END; setMargins(0, 24, 24, 0) }
-            setOnClickListener { toggleStats() }
-        }
-        root.addView(infoBtn)
-
-        // Scrub overlay (bottom): position — progress bar — duration. Shown only
-        // while the user is seeking with the D-pad; hidden once the seek commits.
-        val scrub = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.argb(160, 0, 0, 0))
-            setPadding(40, 24, 40, 24)
-            visibility = View.GONE
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { gravity = Gravity.BOTTOM; setMargins(48, 0, 48, 48) }
-        }
-        val posLbl = TextView(this).apply {
-            setTextColor(Color.WHITE); textSize = 14f; setPadding(0, 0, 24, 0); text = "0:00"
-        }
-        val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = 1000
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        val durLbl = TextView(this).apply {
-            setTextColor(Color.WHITE); textSize = 14f; setPadding(24, 0, 0, 0); text = "0:00"
-        }
-        scrub.addView(posLbl); scrub.addView(bar); scrub.addView(durLbl)
-        root.addView(scrub)
-        scrubOverlay = scrub; scrubBar = bar; scrubPosLabel = posLbl; scrubDurLabel = durLbl
+        tvControls = TvPlayerControlsView(
+            context = this,
+            adapter = ExoTvPlayerAdapter(),
+            onSeekKey = { forward, repeatCount -> onScrubKey(forward, repeatCount) },
+        )
+        root.addView(tvControls)
 
         setContentView(root)
 
@@ -276,15 +255,31 @@ class PlayerActivityExo : AppCompatActivity() {
                     playbackCompleted = true
                     reportStopped(exo.currentPosition)
                 }
+                tvControls?.refresh()
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 reportProgress(exo.currentPosition, !isPlaying)
+                tvControls?.refresh()
             }
             override fun onPositionDiscontinuity(
                 oldP: Player.PositionInfo, newP: Player.PositionInfo, reason: Int,
             ) {
                 if (reason == Player.DISCONTINUITY_REASON_SEEK)
                     reportProgress(newP.positionMs, !exo.isPlaying)
+                tvControls?.refresh()
+            }
+            override fun onTracksChanged(tracks: Tracks) {
+                tvControls?.refresh()
+            }
+            override fun onMetadata(metadata: Metadata) {
+                val parsedChapters = ExoChapterMetadata.extract(metadata)
+                if (parsedChapters.isEmpty()) return
+                val mergedChapters = ExoChapterMetadata.merge(exoChapters, parsedChapters)
+                if (mergedChapters != exoChapters) {
+                    exoChapters = mergedChapters
+                    AppLog.i(TAG, "Exo chapters detected: ${exoChapters.size}")
+                    tvControls?.refresh()
+                }
             }
             override fun onPlayerError(error: PlaybackException) {
                 val cause = error.cause
@@ -312,6 +307,8 @@ class PlayerActivityExo : AppCompatActivity() {
     private fun toggleStats() {
         statsVisible = !statsVisible
         statsView?.visibility = if (statsVisible) View.VISIBLE else View.GONE
+        if (statsVisible) updateStats()
+        tvControls?.refresh()
     }
 
     /**
@@ -345,28 +342,8 @@ class PlayerActivityExo : AppCompatActivity() {
         AppLog.i(TAG, "start buffer ${ms.toInt()}ms (pref=${if (pref > 0) "${pref}s" else "auto"})")
     }
 
-    // D-pad UP/DOWN toggles the nerd panel — universal on every remote, no INFO
-    // key needed. LEFT/RIGHT (and media rewind/ff) drive the scrub-then-commit
-    // seek. All are intercepted here, before the PlayerView controller sees them,
-    // because on some TV boxes the controller swallows the keys without seeking.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        val code = event.keyCode
-        if (event.action == KeyEvent.ACTION_DOWN &&
-            (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN)
-        ) {
-            toggleStats()
-            return true
-        }
-        if (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_MEDIA_REWIND ||
-            code == KeyEvent.KEYCODE_DPAD_RIGHT || code == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
-        ) {
-            if (event.action == KeyEvent.ACTION_DOWN) {
-                val forward = code == KeyEvent.KEYCODE_DPAD_RIGHT ||
-                    code == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
-                onScrubKey(forward, event.repeatCount)
-            }
-            return true // consume DOWN and UP so the controller never also seeks
-        }
+        if (tvControls?.handleKey(event) == true) return true
         return super.dispatchKeyEvent(event)
     }
 
@@ -386,13 +363,11 @@ class PlayerActivityExo : AppCompatActivity() {
         if (!scrubbing) {
             scrubbing = true
             scrubTargetMs = p.currentPosition.coerceIn(0, dur)
-            scrubOverlay?.visibility = View.VISIBLE
+            if (tvControls?.visibility != View.VISIBLE) tvControls?.showAndFocus()
         }
         val step = scrubStepMs(repeatCount)
         scrubTargetMs = (scrubTargetMs + if (forward) step else -step).coerceIn(0, dur)
-        scrubBar?.progress = (scrubTargetMs * 1000 / dur).toInt()
-        scrubPosLabel?.text = fmtTime(scrubTargetMs)
-        scrubDurLabel?.text = fmtTime(dur)
+        tvControls?.refresh()
         scrubHandler.removeCallbacks(commitScrubRunnable)
         scrubHandler.postDelayed(commitScrubRunnable, SCRUB_COMMIT_DELAY_MS)
     }
@@ -400,8 +375,8 @@ class PlayerActivityExo : AppCompatActivity() {
     private fun commitScrub() {
         if (!scrubbing) return
         scrubbing = false
-        scrubOverlay?.visibility = View.GONE
         player?.seekTo(scrubTargetMs)
+        tvControls?.refresh()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -436,6 +411,7 @@ class PlayerActivityExo : AppCompatActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (true) {
+                    tvControls?.refresh()
                     updateStats()
                     delay(1000)
                 }
@@ -508,6 +484,195 @@ class PlayerActivityExo : AppCompatActivity() {
         statsView?.text = sb
     }
 
+    private inner class ExoTvPlayerAdapter : TvPlayerAdapter {
+        override fun isPlaying(): Boolean = player?.isPlaying == true
+
+        override fun play() {
+            player?.play()
+        }
+
+        override fun pause() {
+            player?.pause()
+        }
+
+        override fun durationMs(): Long {
+            val dur = player?.duration ?: durationMs
+            return if (dur > 0) dur else durationMs
+        }
+
+        override fun positionMs(): Long {
+            return if (scrubbing) scrubTargetMs else player?.currentPosition ?: 0
+        }
+
+        override fun seekTo(positionMs: Long) {
+            val p = player ?: return
+            p.seekTo(positionMs.coerceAtLeast(0))
+            tvControls?.refresh()
+        }
+
+        override fun audioOptions(): List<PlayerOption> {
+            return trackOptions(C.TRACK_TYPE_AUDIO)
+        }
+
+        override fun subtitleOptions(): List<PlayerOption> {
+            val tracks = trackOptions(C.TRACK_TYPE_TEXT)
+            if (tracks.isEmpty()) return emptyList()
+            return listOf(PlayerOption.off(selected = tracks.none { it.selected })) + tracks
+        }
+
+        override fun videoOptions(): List<PlayerOption> {
+            return trackOptions(C.TRACK_TYPE_VIDEO)
+        }
+
+        override fun chapterOptions(): List<PlayerOption> {
+            val duration = durationMs()
+            val position = positionMs()
+            val chapters = exoChapters
+                .filter { chapter -> duration <= 0 || chapter.startMs <= duration }
+                .sortedBy { chapter -> chapter.startMs }
+            if (chapters.isEmpty()) return emptyList()
+
+            val selectedIndex = chapters.indexOfLast { chapter -> chapter.startMs <= position }
+                .coerceAtLeast(0)
+            return chapters.mapIndexed { index, chapter ->
+                PlayerOption.chapter(
+                    id = chapter.startMs.toString(),
+                    index = index,
+                    name = chapter.title,
+                    timeOffsetMs = chapter.startMs,
+                    selected = index == selectedIndex,
+                )
+            }
+        }
+
+        override fun selectOption(kind: PlayerOptionKind, id: String) {
+            val p = player ?: return
+            if (kind == PlayerOptionKind.CHAPTER) {
+                val targetMs = id.toLongOrNull() ?: return
+                p.seekTo(targetMs)
+                reportProgress(targetMs, !p.isPlaying)
+                tvControls?.refresh()
+                return
+            }
+            val trackType = when (kind) {
+                PlayerOptionKind.AUDIO -> C.TRACK_TYPE_AUDIO
+                PlayerOptionKind.SUBTITLE -> C.TRACK_TYPE_TEXT
+                PlayerOptionKind.VIDEO -> C.TRACK_TYPE_VIDEO
+                PlayerOptionKind.CHAPTER -> return
+            }
+            val builder = p.trackSelectionParameters.buildUpon()
+                .clearOverridesOfType(trackType)
+
+            if (kind == PlayerOptionKind.SUBTITLE && id == "off") {
+                builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                p.trackSelectionParameters = builder.build()
+                tvControls?.refresh()
+                return
+            }
+
+            val trackId = parseTrackId(id) ?: return
+            val group = p.currentTracks.groups.getOrNull(trackId.groupIndex) ?: return
+            if (group.type != trackType || trackId.trackIndex !in 0 until group.length) return
+
+            builder
+                .setTrackTypeDisabled(trackType, false)
+                .setOverrideForType(
+                    TrackSelectionOverride(
+                        group.mediaTrackGroup,
+                        listOf(trackId.trackIndex),
+                    ),
+                )
+            p.trackSelectionParameters = builder.build()
+            tvControls?.refresh()
+        }
+
+        override fun isStatsVisible(): Boolean = statsVisible
+
+        override fun setStatsVisible(visible: Boolean) {
+            statsVisible = visible
+            statsView?.visibility = if (visible) View.VISIBLE else View.GONE
+            if (visible) updateStats()
+            tvControls?.refresh()
+        }
+
+        private fun trackOptions(trackType: Int): List<PlayerOption> {
+            val p = player ?: return emptyList()
+            return p.currentTracks.groups.flatMapIndexed { groupIndex, group ->
+                if (group.type != trackType) {
+                    emptyList()
+                } else {
+                    (0 until group.length).map { trackIndex ->
+                        val format = group.getTrackFormat(trackIndex)
+                        PlayerOption.track(
+                            id = trackId(groupIndex, trackIndex),
+                            title = trackTitle(format, trackType, trackIndex),
+                            language = format.language.orEmpty(),
+                            details = trackDetails(format, trackType),
+                            selected = group.isTrackSelected(trackIndex),
+                            enabled = group.isTrackSupported(trackIndex),
+                        )
+                    }
+                }
+            }
+        }
+
+        private fun trackId(groupIndex: Int, trackIndex: Int): String {
+            return "$groupIndex:$trackIndex"
+        }
+
+        private fun parseTrackId(id: String): ExoTrackId? {
+            val parts = id.split(':')
+            if (parts.size != 2) return null
+            val groupIndex = parts[0].toIntOrNull() ?: return null
+            val trackIndex = parts[1].toIntOrNull() ?: return null
+            return ExoTrackId(groupIndex, trackIndex)
+        }
+
+        private fun trackTitle(format: Format, trackType: Int, trackIndex: Int): String {
+            format.label?.takeIf { it.isNotBlank() }?.let { return it }
+            return when (trackType) {
+                C.TRACK_TYPE_VIDEO -> {
+                    if (format.width > 0 && format.height > 0) {
+                        "${format.width}x${format.height}"
+                    } else {
+                        "Video ${trackIndex + 1}"
+                    }
+                }
+                C.TRACK_TYPE_AUDIO ->
+                    format.language?.takeIf { it.isNotBlank() } ?: "Audio ${trackIndex + 1}"
+                C.TRACK_TYPE_TEXT ->
+                    format.language?.takeIf { it.isNotBlank() } ?: "Subtitle ${trackIndex + 1}"
+                else -> "Track ${trackIndex + 1}"
+            }
+        }
+
+        private fun trackDetails(format: Format, trackType: Int): String {
+            val parts = mutableListOf<String>()
+            val mime = format.sampleMimeType ?: format.codecs
+            if (!mime.isNullOrBlank()) parts += mime
+            when (trackType) {
+                C.TRACK_TYPE_VIDEO -> {
+                    if (format.frameRate > 0f) parts += String.format("%.2f fps", format.frameRate)
+                    if (format.bitrate > 0) parts += humanRate(format.bitrate.toDouble())
+                }
+                C.TRACK_TYPE_AUDIO -> {
+                    if (format.channelCount > 0) parts += "${format.channelCount}ch"
+                    if (format.sampleRate > 0) parts += "${format.sampleRate}Hz"
+                    if (format.bitrate > 0) parts += humanRate(format.bitrate.toDouble())
+                }
+                C.TRACK_TYPE_TEXT -> {
+                    if (!format.codecs.isNullOrBlank() && format.codecs != mime) parts += format.codecs!!
+                }
+            }
+            return parts.joinToString(" ")
+        }
+    }
+
+    private data class ExoTrackId(
+        val groupIndex: Int,
+        val trackIndex: Int,
+    )
+
     private fun humanSize(bytes: Long): String {
         if (bytes <= 0) return "0 MB"
         val gb = bytes / 1_073_741_824.0
@@ -536,6 +701,7 @@ class PlayerActivityExo : AppCompatActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (true) {
                     val p = player
+                    tvControls?.refresh()
                     if (p != null && p.isPlaying) reportProgress(p.currentPosition, false)
                     delay(10_000)
                 }

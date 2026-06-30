@@ -11,10 +11,7 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
-import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -25,6 +22,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import net.fatshotty.tgstream.emby.EmbyReporter
+import net.fatshotty.tgstream.player.controls.PlayerOption
+import net.fatshotty.tgstream.player.controls.PlayerOptionKind
+import net.fatshotty.tgstream.player.controls.TvPlayerAdapter
+import net.fatshotty.tgstream.player.controls.TvPlayerControlsView
 import net.fatshotty.tgstream.tg.Tg
 import net.fatshotty.tgstream.util.AppLog
 import org.videolan.libvlc.LibVLC
@@ -82,14 +83,7 @@ class PlayerActivity : AppCompatActivity() {
     @Volatile private var durationMs: Long = 0
     @Volatile private var bufferingPct: Double = 100.0
 
-    // controls
-    private var controlsBar: View? = null
-    private var seekBar: SeekBar? = null
-    private var positionLabel: TextView? = null
-    private var durationLabel: TextView? = null
-    private var playPauseBtn: Button? = null
-    private var userSeeking = false
-    private val hideControls = Runnable { controlsBar?.visibility = View.GONE }
+    private var tvControls: TvPlayerControlsView? = null
 
     // scrub (D-pad seek preview): the seekbar moves while pressing; the actual
     // seek is committed once the user stops (debounced).
@@ -190,7 +184,7 @@ class PlayerActivity : AppCompatActivity() {
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
             )
-            setOnClickListener { toggleControls() }
+            setOnClickListener { tvControls?.showAndFocus() }
         }
         root.addView(catcher)
 
@@ -207,65 +201,14 @@ class PlayerActivity : AppCompatActivity() {
         }
         root.addView(statsView)
 
-        val infoBtn = Button(this).apply {
-            text = "ⓘ"
-            isFocusable = true
-            alpha = 0.6f
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { gravity = Gravity.TOP or Gravity.END; setMargins(0, 24, 24, 0) }
-            setOnClickListener { toggleStats() }
-        }
-        root.addView(infoBtn)
-
-        // Bottom control bar: play/pause, position, seekbar, duration.
-        val bar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.argb(140, 0, 0, 0))
-            setPadding(24, 16, 24, 16)
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { gravity = Gravity.BOTTOM }
-        }
-        playPauseBtn = Button(this).apply {
-            text = "❚❚"
-            isFocusable = true
-            setOnClickListener { togglePlay() }
-        }
-        positionLabel = TextView(this).apply {
-            setTextColor(Color.WHITE); textSize = 13f; setPadding(16, 0, 16, 0); text = "0:00"
-        }
-        seekBar = SeekBar(this).apply {
-            max = 1000
-            isFocusable = true
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
-                    if (fromUser) positionLabel?.text = fmtTime((progress / 1000.0 * durationMs).toLong())
-                }
-                override fun onStartTrackingTouch(sb: SeekBar) { userSeeking = true; showControls() }
-                override fun onStopTrackingTouch(sb: SeekBar) {
-                    mediaPlayer?.let { mp ->
-                        mp.position = sb.progress / 1000f
-                        reportProgress(mp.time, !mp.isPlaying, "TimeUpdate")
-                    }
-                    userSeeking = false
-                }
-            })
-        }
-        durationLabel = TextView(this).apply {
-            setTextColor(Color.WHITE); textSize = 13f; setPadding(16, 0, 0, 0); text = "0:00"
-        }
-        bar.addView(playPauseBtn)
-        bar.addView(positionLabel)
-        bar.addView(seekBar)
-        bar.addView(durationLabel)
-        controlsBar = bar
-        root.addView(bar)
+        tvControls = TvPlayerControlsView(
+            context = this,
+            adapter = VlcTvPlayerAdapter(),
+            onSeekKey = { forward, repeatCount -> onScrubKey(forward, repeatCount) },
+        )
+        root.addView(tvControls)
 
         setContentView(root)
-        showControls()
     }
 
     /** libVLC events fire on a VLC thread; only do thread-safe work or post to UI. */
@@ -314,12 +257,7 @@ class PlayerActivity : AppCompatActivity() {
                     if (mp != null) {
                         val len = mp.length
                         if (len > 0) durationMs = len
-                        if (!userSeeking && durationMs > 0) {
-                            seekBar?.progress = (mp.position * 1000).toInt()
-                            positionLabel?.text = fmtTime(mp.time)
-                            durationLabel?.text = fmtTime(durationMs)
-                        }
-                        playPauseBtn?.text = if (mp.isPlaying) "❚❚" else "▶"
+                        tvControls?.refresh()
                         sampleBandwidth(mp)
                         if (statsVisible) updateStats(mp)
                         if (mp.isPlaying && tick % 10 == 9) reportProgress(mp.time, false, "TimeUpdate")
@@ -331,32 +269,11 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    private fun togglePlay() {
-        val mp = mediaPlayer ?: return
-        if (mp.isPlaying) mp.pause() else mp.play()
-        showControls()
-    }
-
-    private fun toggleControls() {
-        val bar = controlsBar ?: return
-        if (bar.visibility == View.VISIBLE) {
-            bar.visibility = View.GONE
-            bar.removeCallbacks(hideControls)
-        } else {
-            showControls()
-        }
-    }
-
-    private fun showControls() {
-        val bar = controlsBar ?: return
-        bar.visibility = View.VISIBLE
-        bar.removeCallbacks(hideControls)
-        bar.postDelayed(hideControls, 4000)
-    }
-
     private fun toggleStats() {
         statsVisible = !statsVisible
         statsView?.visibility = if (statsVisible) View.VISIBLE else View.GONE
+        mediaPlayer?.let { if (statsVisible) updateStats(it) }
+        tvControls?.refresh()
     }
 
     /** Samples libVLC's read counter to compute our own download rate. Runs
@@ -479,28 +396,8 @@ class PlayerActivity : AppCompatActivity() {
         else String.format("%d:%02d", m, sec)
     }
 
-    // D-pad UP toggles the nerd/info panel — universal on every remote (no INFO
-    // key needed). LEFT/RIGHT (and media rewind/ff) drive the scrub-then-commit
-    // seek. Intercepted before view dispatch so they work even while the on-screen
-    // controls (the focusable SeekBar) are focused.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        val code = event.keyCode
-        if (event.action == KeyEvent.ACTION_DOWN &&
-            (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN)
-        ) {
-            toggleStats()
-            return true
-        }
-        if (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_MEDIA_REWIND ||
-            code == KeyEvent.KEYCODE_DPAD_RIGHT || code == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
-        ) {
-            if (event.action == KeyEvent.ACTION_DOWN) {
-                val forward = code == KeyEvent.KEYCODE_DPAD_RIGHT ||
-                    code == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
-                onScrubKey(forward, event.repeatCount)
-            }
-            return true // consume DOWN and UP so the SeekBar never also seeks
-        }
+        if (tvControls?.handleKey(event) == true) return true
         return super.dispatchKeyEvent(event)
     }
 
@@ -508,9 +405,6 @@ class PlayerActivity : AppCompatActivity() {
         when (keyCode) {
             KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_PROG_YELLOW -> {
                 toggleStats(); return true
-            }
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                if (controlsBar?.visibility != View.VISIBLE) { togglePlay(); return true }
             }
         }
         return super.onKeyDown(keyCode, event)
@@ -529,14 +423,12 @@ class PlayerActivity : AppCompatActivity() {
         if (dur <= 0) return // duration unknown yet: can't scrub
         if (!scrubbing) {
             scrubbing = true
-            userSeeking = true // freeze the UI loop from overwriting the seekbar
             scrubTargetMs = (mediaPlayer?.time ?: 0).coerceIn(0, dur)
-            showControls()
+            if (tvControls?.visibility != View.VISIBLE) tvControls?.showAndFocus()
         }
         val step = scrubStepMs(repeatCount)
         scrubTargetMs = (scrubTargetMs + if (forward) step else -step).coerceIn(0, dur)
-        seekBar?.progress = (scrubTargetMs * 1000 / dur).toInt()
-        positionLabel?.text = fmtTime(scrubTargetMs)
+        tvControls?.refresh()
         scrubHandler.removeCallbacks(commitScrubRunnable)
         scrubHandler.postDelayed(commitScrubRunnable, SCRUB_COMMIT_DELAY_MS)
     }
@@ -544,11 +436,129 @@ class PlayerActivity : AppCompatActivity() {
     private fun commitScrub() {
         if (!scrubbing) return
         scrubbing = false
-        userSeeking = false
         val mp = mediaPlayer ?: return
         mp.time = scrubTargetMs
         reportProgress(scrubTargetMs, !mp.isPlaying, "TimeUpdate")
-        showControls()
+        tvControls?.refresh()
+    }
+
+    private inner class VlcTvPlayerAdapter : TvPlayerAdapter {
+        override fun isPlaying(): Boolean = mediaPlayer?.isPlaying == true
+
+        override fun play() {
+            mediaPlayer?.play()
+        }
+
+        override fun pause() {
+            mediaPlayer?.pause()
+        }
+
+        override fun durationMs(): Long = durationMs
+
+        override fun positionMs(): Long {
+            return if (scrubbing) scrubTargetMs else mediaPlayer?.time ?: 0
+        }
+
+        override fun seekTo(positionMs: Long) {
+            val mp = mediaPlayer ?: return
+            val target = positionMs.coerceAtLeast(0)
+            mp.time = target
+            reportProgress(target, !mp.isPlaying, "TimeUpdate")
+        }
+
+        override fun audioOptions(): List<PlayerOption> {
+            val mp = mediaPlayer ?: return emptyList()
+            val selectedId = runCatching { mp.getAudioTrack() }.getOrDefault(Int.MIN_VALUE)
+            return runCatching {
+                mp.getAudioTracks()
+                    ?.map { track ->
+                        PlayerOption.track(
+                            id = track.id.toString(),
+                            title = track.name.orEmpty(),
+                            selected = track.id == selectedId,
+                        )
+                    }
+                    .orEmpty()
+            }.getOrDefault(emptyList())
+        }
+
+        override fun subtitleOptions(): List<PlayerOption> {
+            val mp = mediaPlayer ?: return listOf(PlayerOption.off(selected = true))
+            val selectedId = runCatching { mp.getSpuTrack() }.getOrDefault(-1)
+            val tracks = runCatching {
+                mp.getSpuTracks()
+                    ?.filter { it.id >= 0 }
+                    ?.map { track ->
+                        PlayerOption.track(
+                            id = track.id.toString(),
+                            title = track.name.orEmpty(),
+                            selected = track.id == selectedId,
+                        )
+                    }
+                    .orEmpty()
+            }.getOrDefault(emptyList())
+            return listOf(PlayerOption.off(id = "-1", selected = selectedId < 0)) + tracks
+        }
+
+        override fun videoOptions(): List<PlayerOption> {
+            val mp = mediaPlayer ?: return emptyList()
+            val selectedId = runCatching { mp.getVideoTrack() }.getOrDefault(Int.MIN_VALUE)
+            return runCatching {
+                mp.getVideoTracks()
+                    ?.filter { it.id >= 0 }
+                    ?.map { track ->
+                        PlayerOption.track(
+                            id = track.id.toString(),
+                            title = track.name.orEmpty(),
+                            selected = track.id == selectedId,
+                        )
+                    }
+                    .orEmpty()
+            }.getOrDefault(emptyList())
+        }
+
+        override fun chapterOptions(): List<PlayerOption> {
+            val mp = mediaPlayer ?: return emptyList()
+            val titleIndex = runCatching { mp.getTitle() }.getOrDefault(-1)
+            if (titleIndex < 0) return emptyList()
+            val selectedChapter = runCatching { mp.getChapter() }.getOrDefault(-1)
+            return runCatching {
+                mp.getChapters(titleIndex)
+                    ?.mapIndexed { index, chapter ->
+                        PlayerOption.chapter(
+                            id = index.toString(),
+                            index = index,
+                            name = chapter.name.orEmpty(),
+                            timeOffsetMs = chapter.timeOffset,
+                            selected = index == selectedChapter,
+                        )
+                    }
+                    .orEmpty()
+            }.getOrDefault(emptyList())
+        }
+
+        override fun selectOption(kind: PlayerOptionKind, id: String) {
+            val mp = mediaPlayer ?: return
+            val trackId = id.toIntOrNull() ?: return
+            when (kind) {
+                PlayerOptionKind.AUDIO -> mp.setAudioTrack(trackId)
+                PlayerOptionKind.SUBTITLE -> mp.setSpuTrack(trackId)
+                PlayerOptionKind.VIDEO -> mp.setVideoTrack(trackId)
+                PlayerOptionKind.CHAPTER -> {
+                    mp.setChapter(trackId)
+                    reportProgress(mp.time, !mp.isPlaying, "TimeUpdate")
+                }
+            }
+            tvControls?.refresh()
+        }
+
+        override fun isStatsVisible(): Boolean = statsVisible
+
+        override fun setStatsVisible(visible: Boolean) {
+            statsVisible = visible
+            statsView?.visibility = if (visible) View.VISIBLE else View.GONE
+            mediaPlayer?.let { if (visible) updateStats(it) }
+        }
     }
 
     // Position is always captured by the caller (player thread) and passed in as
