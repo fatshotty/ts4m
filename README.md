@@ -12,9 +12,15 @@ localhost HTTP proxy — so large buffers stay in native memory and never cross
 the JNI boundary.
 
 - **Direct playback** of channel media on a TV box or phone.
-- **Emby external-player integration**: Emby launches the app with its normal
-  stream URL; tgstream resolves the item metadata and expects the backing
-  `.strm` path to contain `/download/{id}/{channel_id}/{ordered-parts-dashed}`.
+- **Canonical direct links**: any app can launch
+  `tgstream://play?channel=<id>&messages=<m1-m2-...>` with optional `title` and
+  `pos` parameters, without Emby or playback reporting.
+- **Emby/Jellyfin external-player integration**: the media server launches the
+  app with its normal stream URL; tgstream resolves the item metadata and reads a
+  `#tgstream/...` directive from the backing `.strm` URL fragment
+  (`#tgstream/<channel_id>/<message_ids>`), while the URL before `#` remains
+  playable by Emby/Jellyfin/ffmpeg. Server path prefixes such as `/emby` and
+  `/jellyfin` are kept for playback progress reporting.
 - **Rebuilds split files**: when a large file is stored as several smaller parts
   across multiple Telegram messages, the app stitches them back together **in
   order** and serves one continuous stream.
@@ -60,8 +66,6 @@ builds are unchanged (their standard library already uses hardware AES).
 On the download side, streaming uses the DC's **media endpoint** (unthrottled)
 instead of the throttled regular endpoint, with parallel connections on a single
 user account — no bots required.
-
-> Full write-up: [docs/superpowers/specs/2026-06-24-armv8-hardware-aes-32bit.md](docs/superpowers/specs/2026-06-24-armv8-hardware-aes-32bit.md)
 
 ## Install / update
 
