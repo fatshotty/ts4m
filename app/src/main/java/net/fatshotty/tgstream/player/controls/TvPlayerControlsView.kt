@@ -33,6 +33,7 @@ class TvPlayerControlsView(
     private val positionView = timeTextView()
     private val durationView = timeTextView()
     private val consumedKeyCodes = mutableSetOf<Int>()
+    private val remoteScrubSession = RemoteScrubSession()
     private var seekBarScrubbing = false
     private val seekBar = SeekBar(context).apply {
         isFocusable = true
@@ -136,8 +137,13 @@ class TvPlayerControlsView(
     }
 
     fun handleKey(event: KeyEvent): Boolean {
-        if (event.action == KeyEvent.ACTION_UP && consumedKeyCodes.remove(event.keyCode)) {
-            return true
+        if (event.action == KeyEvent.ACTION_UP) {
+            if (remoteScrubSession.finishIfReleased(event.keyCode, event.action)) {
+                setSeekBarScrubbing(false)
+            }
+            if (consumedKeyCodes.remove(event.keyCode)) {
+                return true
+            }
         }
         if (event.action == KeyEvent.ACTION_DOWN && seekBar.hasFocus()) {
             if (event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER) {
@@ -164,6 +170,7 @@ class TvPlayerControlsView(
             }
         }
 
+        val controlsWereHidden = visibility != View.VISIBLE
         val consumed = when (
             PlaybackKeyPolicy.actionFor(
                 keyCode = event.keyCode,
@@ -205,11 +212,21 @@ class TvPlayerControlsView(
                 true
             }
             PlaybackKeyAction.SCRUB_BACK -> {
-                scrubFromFocusedSeekBar(false, event.repeatCount)
+                scrubFromFocusedSeekBar(
+                    forward = false,
+                    repeatCount = event.repeatCount,
+                    keyCode = event.keyCode,
+                    startRemoteSession = controlsWereHidden,
+                )
                 true
             }
             PlaybackKeyAction.SCRUB_FORWARD -> {
-                scrubFromFocusedSeekBar(true, event.repeatCount)
+                scrubFromFocusedSeekBar(
+                    forward = true,
+                    repeatCount = event.repeatCount,
+                    keyCode = event.keyCode,
+                    startRemoteSession = controlsWereHidden,
+                )
                 true
             }
             PlaybackKeyAction.TOGGLE_STATS -> {
@@ -232,6 +249,7 @@ class TvPlayerControlsView(
     fun showAndFocus() {
         visibility = View.VISIBLE
         bringToFront()
+        remoteScrubSession.reset()
         setSeekBarScrubbing(false)
         refresh()
         playPauseButton.requestFocus()
@@ -240,6 +258,7 @@ class TvPlayerControlsView(
 
     fun hide() {
         removeCallbacks(hideRunnable)
+        remoteScrubSession.reset()
         setSeekBarScrubbing(false)
         visibility = View.GONE
     }
@@ -299,9 +318,17 @@ class TvPlayerControlsView(
         scheduleAutoHide()
     }
 
-    private fun scrubFromFocusedSeekBar(forward: Boolean, repeatCount: Int) {
+    private fun scrubFromFocusedSeekBar(
+        forward: Boolean,
+        repeatCount: Int,
+        keyCode: Int,
+        startRemoteSession: Boolean,
+    ) {
         visibility = View.VISIBLE
         bringToFront()
+        if (startRemoteSession && remoteScrubSession.begin(keyCode)) {
+            setSeekBarScrubbing(true)
+        }
         onSeekKey(forward, repeatCount)
         refresh()
         seekBar.requestFocus()
