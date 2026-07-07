@@ -90,6 +90,16 @@ class EmbyProviderTest {
         assertEquals("10-11", spec.messagesDash)
     }
 
+    @Test fun parsesFragmentDirectiveWhenPlayableUrlContainsRawSpaces() {
+        val spec = EmbyProvider.parseStrmStreamSpec(
+            "http://172.17.0.1:48080/download/8vkjor6u4a/La grande guerra del Salento (2022) - 1080p h264 AAC 2ch 6,70 G.mkv#tgstream/-1001551723217/17657-17658",
+        )
+
+        assertEquals("-1001551723217:17657-17658", spec.streamId)
+        assertEquals(-1001551723217L, spec.channelId)
+        assertEquals("17657-17658", spec.messagesDash)
+    }
+
     @Test fun rejectsFragmentDirectiveWithExplicitStreamId() {
         assertProviderError("Emby: invalid tgstream directive") {
             EmbyProvider.parseStrmStreamSpec(

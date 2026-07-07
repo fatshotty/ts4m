@@ -33,6 +33,7 @@ class EmbyApiClient(
     private fun get(path: String): String {
         val url = serverBase.trimEnd('/') + path +
             (if (path.contains("?")) "&" else "?") + "api_key=" + token
+        AppLog.i("EmbyApiClient", "GET ${AppLog.redactUrl(url)}")
         val req = Request.Builder()
             .url(url)
             .header("X-Emby-Token", token)
@@ -41,6 +42,7 @@ class EmbyApiClient(
             .build()
         http.newCall(req).execute().use { resp ->
             val body = resp.body?.string().orEmpty()
+            AppLog.i("EmbyApiClient", "GET $path -> ${resp.code}")
             if (!resp.isSuccessful) {
                 throw RuntimeException("Emby ${resp.code} on $path: ${body.take(200)}")
             }

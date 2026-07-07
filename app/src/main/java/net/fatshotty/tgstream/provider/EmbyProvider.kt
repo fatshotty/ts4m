@@ -2,6 +2,7 @@ package net.fatshotty.tgstream.provider
 
 import android.net.Uri
 import net.fatshotty.tgstream.emby.EmbyApiClient
+import net.fatshotty.tgstream.util.AppLog
 import java.net.URI
 import java.util.UUID
 
@@ -52,11 +53,28 @@ class EmbyProvider : Provider {
         val playSessionId = queryParam(uri, "PlaySessionId")
             .ifBlank { UUID.randomUUID().toString().replace("-", "") }
 
+        AppLog.i(
+            TAG,
+            "Emby resolve: serverBase=$serverBase itemId=$itemId " +
+                "deviceId=${deviceId.isNotBlank()} mediaSourceId=${mediaSourceId.isNotBlank()} " +
+                "playSessionId=${playSessionId.isNotBlank()}",
+        )
+
         val client = EmbyApiClient(serverBase, token, deviceId)
         val userId = runCatching { client.userId() }.getOrDefault("")
+        AppLog.i(TAG, "Emby userId resolved: ${userId.isNotBlank()}")
         val info = client.item(userId, itemId)
+        AppLog.i(
+            TAG,
+            "Emby item: name=${info.name.take(80)} runtimeTicks=${info.runtimeTicks} " +
+                "positionTicks=${info.positionTicks} path=${AppLog.redactUrl(info.path)}",
+        )
 
         val stream = parseStrmStreamSpec(info.path)
+        AppLog.i(
+            TAG,
+            "Emby tgstream directive: channel=${stream.channelId} messages=${stream.messagesDash}",
+        )
 
         val runtimeMs = info.runtimeTicks / 10_000
         val positionMs = resolveStartPositionMs(uri.toString(), info.positionTicks)
@@ -109,6 +127,7 @@ class EmbyProvider : Provider {
     private fun findItemId(uri: Uri): String? = extractItemId(uri.pathSegments)
 
     companion object {
+        private const val TAG = "EmbyProvider"
         private val itemMarkers = setOf("videos", "items", "item")
         private val apiBaseMarkers = itemMarkers + "users"
         private val mediaExtensions = setOf(
@@ -170,10 +189,7 @@ class EmbyProvider : Provider {
 
         fun parseStrmStreamSpec(raw: String): StreamSpec {
             if (raw.isBlank()) throw ProviderException("Emby: empty media path (.strm)")
-            val u = runCatching { URI(raw.trim()) }.getOrNull()
-                ?: throw ProviderException("Emby: .strm is not a valid URL: $raw")
-
-            parseFragmentDirective(u.rawFragment)?.let { return it }
+            parseFragmentDirective(fragmentDirective(raw))?.let { return it }
 
             throw ProviderException("Emby: tgstream directive not found in .strm")
         }
@@ -217,6 +233,13 @@ class EmbyProvider : Provider {
                 3 -> streamSpec(parts[1], parts[2])
                 else -> throw ProviderException("Emby: invalid tgstream directive")
             }
+        }
+
+        private fun fragmentDirective(raw: String): String? {
+            val text = raw.trim()
+            val marker = text.indexOf('#')
+            if (marker < 0) return null
+            return text.substring(marker + 1)
         }
 
         private fun streamSpec(channelText: String, messagesText: String): StreamSpec {

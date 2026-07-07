@@ -64,11 +64,17 @@ class PlayerEntryActivity : AppCompatActivity() {
             try {
                 val provider = ProviderRegistry.candidates(uri).firstOrNull()
                     ?: throw IllegalStateException("Unsupported URL")
+                AppLog.i(TAG, "Provider selected: ${provider.id}")
                 val source = intent.getStringExtra(EXTRA_HISTORY_SOURCE)
                     ?.takeIf { it.isNotBlank() }
                     ?: provider.id
 
                 val result: ResolveResult = withContext(Dispatchers.IO) { provider.resolve(uri) }
+                AppLog.i(
+                    TAG,
+                    "Resolved stream: channel=${result.stream.channelId} messages=${result.stream.messagesDash} " +
+                        "reporting=${result.reporting.kind} title=${result.stream.title.take(80)}",
+                )
 
                 if (!Tg.awaitReady()) {
                     fail("Telegram is not ready/logged in")
