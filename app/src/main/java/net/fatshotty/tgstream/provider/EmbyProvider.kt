@@ -90,6 +90,7 @@ class EmbyProvider : Provider {
                 serverBase = serverBase,
                 itemId = itemId,
                 token = token,
+                userId = userId,
                 playSessionId = playSessionId,
                 deviceId = deviceId,
                 mediaSourceId = mediaSourceId,

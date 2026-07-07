@@ -166,6 +166,16 @@ The provider registry currently contains:
   "continue watching" keep their source-app meaning. Playback progress is
   reported back to the same server with the original session metadata.
 
+Emby/Jellyfin reporting uses the provider-resolved user id, item id,
+`DeviceId`, `MediaSourceId`, and `PlaySessionId`. Players send
+`/Sessions/Playing`, periodic `/Sessions/Playing/Progress`, and
+`/Sessions/Playing/Stopped`. Progress heartbeats continue while playback is
+paused with `IsPaused=true`, so the source server does not expire the playback
+session. When playback reaches the completion threshold (90% of known duration,
+or a player-completion event), tgstream also calls the explicit played-state API
+(`MarkPlayedItem`) so the source server marks the item watched even if playback
+is stopped during credits.
+
 [DirectLinkCodec.kt](../app/src/main/java/net/fatshotty/tgstream/provider/DirectLinkCodec.kt)
 owns the canonical direct-link parsing and normalization logic used by direct
 links and future source adapters.
@@ -185,4 +195,4 @@ and publishes to GitHub (`gh release create`) with both APKs + `version.json`.
 The engine AAR must be rebuilt first if the Go code changed.
 
 ---
-_Last updated: 2026-06-29._
+_Last updated: 2026-07-07._

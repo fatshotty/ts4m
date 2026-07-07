@@ -126,9 +126,19 @@ belong only in ignored local files or environment variables.
 
 ## Provider And Playback Notes
 
-- Current provider registry contains Emby only.
-- Emby launch URLs are parsed in `EmbyProvider`; the resolved `.strm` media path
-  is expected to contain `/download/{id}/{channel_id}/{message_ids}`.
+- Current provider registry contains Direct links and Emby.
+- Direct links use `tgstream://play?channel=<id>&messages=<m1-m2-...>`, with
+  aliases `channel_id` and `message_ids`; they produce no playback reporting.
+- Emby/Jellyfin launch URLs are parsed in `EmbyProvider`; the resolved `.strm`
+  media path should remain playable by the source server/ffmpeg and carry
+  tgstream metadata in a `#tgstream/{channel_id}/{message_ids}` fragment. The app
+  derives its internal stream id from those Telegram coordinates and keeps server
+  path prefixes such as `/emby` or `/jellyfin` for progress reporting. Explicit
+  launch start ticks must win over saved item resume position.
+- Emby/Jellyfin reporting must keep sending `/Sessions/Playing/Progress` while
+  playback is paused (`IsPaused=true`). Near completion, call the explicit
+  played-state endpoint after `/Sessions/Playing/Stopped` so the source server
+  marks the item watched even when the user exits during credits.
 - `PlayerEntryActivity` must fail with a toast and finish instead of crashing.
 - `PlayerEntryActivity` stays alive behind the player to relay MX-style result
   intents back to the launcher.

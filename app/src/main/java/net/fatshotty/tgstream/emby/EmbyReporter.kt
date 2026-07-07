@@ -9,8 +9,8 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /**
- * Reports playback to an Emby server: start / progress / stopped — the same
- * three calls the native player makes. All calls are blocking; invoke off the
+ * Reports playback to an Emby server: start / progress / stopped plus explicit
+ * watched-state updates near completion. All calls are blocking; invoke off the
  * main thread. Failures are swallowed (reporting must never crash playback) but
  * logged to [AppLog] so the HTTP result is visible in the on-device log.
  *
@@ -22,6 +22,7 @@ class EmbyReporter(
     private val serverBase: String,
     private val token: String,
     private val itemId: String,
+    private val userId: String,
     private val playSessionId: String,
     private val deviceId: String,
     private val mediaSourceId: String,
@@ -34,7 +35,7 @@ class EmbyReporter(
     private val jsonType = "application/json".toMediaType()
     private val authHeader = EmbyAuth.header(token, deviceId)
 
-    private fun post(path: String, body: JSONObject) {
+    private fun post(path: String, body: JSONObject): Boolean {
         try {
             val url = serverBase.trimEnd('/') + path + "?api_key=" + token
             val req = Request.Builder()
@@ -45,10 +46,32 @@ class EmbyReporter(
                 .build()
             http.newCall(req).execute().use { resp ->
                 AppLog.i("EmbyReporter", "POST $path -> ${resp.code}")
+                return resp.isSuccessful
             }
         } catch (t: Throwable) {
             AppLog.w("EmbyReporter", "POST $path failed", t)
         }
+        return false
+    }
+
+    private fun postEmpty(path: String): Boolean {
+        try {
+            val url = serverBase.trimEnd('/') + path +
+                (if (path.contains("?")) "&" else "?") + "api_key=" + token
+            val req = Request.Builder()
+                .url(url)
+                .header("X-Emby-Token", token)
+                .header("X-Emby-Authorization", authHeader)
+                .post(ByteArray(0).toRequestBody(null))
+                .build()
+            http.newCall(req).execute().use { resp ->
+                AppLog.i("EmbyReporter", "POST $path -> ${resp.code}")
+                return resp.isSuccessful
+            }
+        } catch (t: Throwable) {
+            AppLog.w("EmbyReporter", "POST $path failed", t)
+        }
+        return false
     }
 
     private fun base(positionMs: Long, paused: Boolean) = JSONObject().apply {
@@ -78,5 +101,14 @@ class EmbyReporter(
             put("PositionTicks", positionMs * 10_000)
         }
         post("/Sessions/Playing/Stopped", b)
+    }
+
+    fun markPlayed() {
+        if (userId.isBlank()) {
+            AppLog.w("EmbyReporter", "Cannot mark item played: missing userId")
+            return
+        }
+        if (postEmpty("/Users/$userId/PlayedItems/$itemId")) return
+        postEmpty("/UserPlayedItems/$itemId?userId=$userId")
     }
 }

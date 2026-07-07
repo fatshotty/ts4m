@@ -132,6 +132,7 @@ class PlayerEntryActivity : AppCompatActivity() {
             putExtra(PlayerActivity.EXTRA_SERVER, r.reporting.serverBase)
             putExtra(PlayerActivity.EXTRA_ITEM_ID, r.reporting.itemId)
             putExtra(PlayerActivity.EXTRA_TOKEN, r.reporting.token)
+            putExtra(PlayerActivity.EXTRA_USER_ID, r.reporting.userId)
             putExtra(PlayerActivity.EXTRA_PLAY_SESSION, r.reporting.playSessionId)
             putExtra(PlayerActivity.EXTRA_DEVICE_ID, r.reporting.deviceId)
             putExtra(PlayerActivity.EXTRA_MEDIA_SOURCE, r.reporting.mediaSourceId)

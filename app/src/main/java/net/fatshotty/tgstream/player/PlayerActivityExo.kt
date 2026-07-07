@@ -130,6 +130,7 @@ class PlayerActivityExo : AppCompatActivity() {
                 serverBase = intent.getStringExtra(PlayerActivity.EXTRA_SERVER) ?: "",
                 token = intent.getStringExtra(PlayerActivity.EXTRA_TOKEN) ?: "",
                 itemId = intent.getStringExtra(PlayerActivity.EXTRA_ITEM_ID) ?: "",
+                userId = intent.getStringExtra(PlayerActivity.EXTRA_USER_ID) ?: "",
                 playSessionId = intent.getStringExtra(PlayerActivity.EXTRA_PLAY_SESSION) ?: "",
                 deviceId = intent.getStringExtra(PlayerActivity.EXTRA_DEVICE_ID) ?: "",
                 mediaSourceId = intent.getStringExtra(PlayerActivity.EXTRA_MEDIA_SOURCE) ?: "",
@@ -299,7 +300,7 @@ class PlayerActivityExo : AppCompatActivity() {
                 tvControls?.refresh()
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                reportProgress(exo.currentPosition, !isPlaying)
+                reportProgress(exo.currentPosition, !isPlaying, if (isPlaying) "Unpause" else "Pause")
                 tvControls?.refresh()
             }
             override fun onPositionDiscontinuity(
@@ -796,7 +797,9 @@ class PlayerActivityExo : AppCompatActivity() {
                 while (true) {
                     val p = player
                     tvControls?.refresh()
-                    if (p != null && p.isPlaying) reportProgress(p.currentPosition, false)
+                    if (p != null && startReported && !playbackCompleted) {
+                        reportProgress(p.currentPosition, !p.isPlaying)
+                    }
                     delay(10_000)
                 }
             }
@@ -810,25 +813,55 @@ class PlayerActivityExo : AppCompatActivity() {
         lifecycleScope.launch(Dispatchers.IO) { runCatching { r.start(posMs) } }
     }
 
-    private fun reportProgress(posMs: Long, paused: Boolean) {
+    private fun reportProgress(posMs: Long, paused: Boolean, event: String = "TimeUpdate") {
         val r = reporter ?: return
-        lifecycleScope.launch(Dispatchers.IO) { runCatching { r.progress(posMs, paused) } }
+        lifecycleScope.launch(Dispatchers.IO) { runCatching { r.progress(posMs, paused, event) } }
     }
 
     private fun reportStopped(posMs: Long) {
         val r = reporter ?: return
-        lifecycleScope.launch(Dispatchers.IO) { runCatching { r.stopped(posMs) } }
+        val markWatched = shouldMarkWatched(posMs)
+        if (!claimStopReport()) return
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                r.stopped(posMs)
+                if (markWatched) r.markPlayed()
+            }
+        }
     }
 
     override fun onStop() {
         super.onStop()
         val pos = player?.currentPosition ?: 0
         val r = reporter
-        if (r != null) Thread { runCatching { r.stopped(pos) } }.start()
+        val markWatched = shouldMarkWatched(pos)
+        if (r != null && claimStopReport()) {
+            Thread {
+                runCatching {
+                    r.stopped(pos)
+                    if (markWatched) r.markPlayed()
+                }
+            }.start()
+        }
     }
 
     @Volatile private var playbackCompleted = false
+    @Volatile private var stopReported = false
     private var resultRelayed = false
+
+    private fun claimStopReport(): Boolean = synchronized(this) {
+        if (stopReported) return@synchronized false
+        stopReported = true
+        true
+    }
+
+    private fun shouldMarkWatched(posMs: Long): Boolean =
+        PlaybackCompletion.shouldMarkWatched(posMs, currentDurationMs(), playbackCompleted)
+
+    private fun currentDurationMs(): Long {
+        val playerDuration = player?.duration ?: 0L
+        return if (playerDuration > 0) playerDuration else durationMs
+    }
 
     /**
      * Relay an MX-style result to whoever launched us (via PlayerEntryActivity) so

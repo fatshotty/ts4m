@@ -58,6 +58,7 @@ class PlayerActivity : AppCompatActivity() {
         const val EXTRA_SERVER = "server"
         const val EXTRA_ITEM_ID = "item_id"
         const val EXTRA_TOKEN = "token"
+        const val EXTRA_USER_ID = "user_id"
         const val EXTRA_PLAY_SESSION = "play_session"
         const val EXTRA_DEVICE_ID = "device_id"
         const val EXTRA_MEDIA_SOURCE = "media_source"
@@ -125,6 +126,7 @@ class PlayerActivity : AppCompatActivity() {
                 serverBase = intent.getStringExtra(EXTRA_SERVER) ?: "",
                 token = intent.getStringExtra(EXTRA_TOKEN) ?: "",
                 itemId = intent.getStringExtra(EXTRA_ITEM_ID) ?: "",
+                userId = intent.getStringExtra(EXTRA_USER_ID) ?: "",
                 playSessionId = intent.getStringExtra(EXTRA_PLAY_SESSION) ?: "",
                 deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: "",
                 mediaSourceId = intent.getStringExtra(EXTRA_MEDIA_SOURCE) ?: "",
@@ -262,7 +264,9 @@ class PlayerActivity : AppCompatActivity() {
                         tvControls?.refresh()
                         sampleBandwidth(mp)
                         if (statsVisible) updateStats(mp)
-                        if (mp.isPlaying && tick % 10 == 9) reportProgress(mp.time, false, "TimeUpdate")
+                        if (startReported && !playbackCompleted && tick % 10 == 9) {
+                            reportProgress(mp.time, !mp.isPlaying, "TimeUpdate")
+                        }
                     }
                     tick++
                     delay(1000)
@@ -578,18 +582,43 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun reportStopped(posMs: Long) {
         val r = reporter ?: return
-        lifecycleScope.launch(Dispatchers.IO) { runCatching { r.stopped(posMs) } }
+        val markWatched = shouldMarkWatched(posMs)
+        if (!claimStopReport()) return
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                r.stopped(posMs)
+                if (markWatched) r.markPlayed()
+            }
+        }
     }
 
     override fun onStop() {
         super.onStop()
         val pos = mediaPlayer?.time ?: 0
         val r = reporter
-        if (r != null) Thread { runCatching { r.stopped(pos) } }.start()
+        val markWatched = shouldMarkWatched(pos)
+        if (r != null && claimStopReport()) {
+            Thread {
+                runCatching {
+                    r.stopped(pos)
+                    if (markWatched) r.markPlayed()
+                }
+            }.start()
+        }
     }
 
     @Volatile private var playbackCompleted = false
+    @Volatile private var stopReported = false
     private var resultRelayed = false
+
+    private fun claimStopReport(): Boolean = synchronized(this) {
+        if (stopReported) return@synchronized false
+        stopReported = true
+        true
+    }
+
+    private fun shouldMarkWatched(posMs: Long): Boolean =
+        PlaybackCompletion.shouldMarkWatched(posMs, durationMs, playbackCompleted)
 
     /**
      * Relay an MX-style result to whoever launched us (via PlayerEntryActivity) so

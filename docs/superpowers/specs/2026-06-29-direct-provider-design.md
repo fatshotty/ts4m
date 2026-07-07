@@ -3,6 +3,9 @@
 Date: 2026-06-29
 Branch: `develop`
 Status: implemented in app/provider code
+Update: Emby/Jellyfin `.strm` parsing now prefers ffmpeg-safe URL fragments:
+`#tgstream/{channel}/{parts}` and keeps source-server path prefixes for
+progress reporting.
 
 ## Goal
 
@@ -43,6 +46,7 @@ Introduce `DirectLinkCodec` as the shared parser/normalizer for the canonical
 direct URI format. It should:
 
 - parse `tgstream://play?...` into `StreamSpec`
+- assign a stable internal `streamId` from channel/messages
 - validate required fields and report clear `ProviderException`s
 - normalize message ids to dash-separated form
 - convert `pos` seconds to milliseconds
@@ -57,9 +61,13 @@ It should:
 - perform no network calls
 
 Keep `EmbyProvider` as an adapter, not as a caller of `DirectProvider`. It still
-resolves Emby metadata, extracts Telegram stream information from the backing
-`.strm`, and returns `ReportingContext(kind = "emby")` so playback reporting is
-preserved.
+resolves Emby/Jellyfin metadata, extracts Telegram stream information from the
+backing `.strm`, and returns `ReportingContext(kind = "emby")` so playback
+reporting is preserved through the Emby-compatible API. The preferred `.strm`
+form is a normal playable URL with a fragment directive, for example
+`http://server/movie.mkv#tgstream/{channel_id}/{message_ids}`. Emby item ids and
+path segments before `#` are not used as tgstream stream ids. Source-server path
+prefixes such as `/emby` and `/jellyfin` remain part of the API base URL.
 
 `ProviderRegistry` should include both providers, with `DirectProvider` first:
 

@@ -18,6 +18,7 @@ data class ReportingContext(
     val serverBase: String = "",
     val itemId: String = "",
     val token: String = "",
+    val userId: String = "",
     val playSessionId: String = "",
     val deviceId: String = "",
     val mediaSourceId: String = "",
