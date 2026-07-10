@@ -36,7 +36,9 @@ unthrottled **media endpoint** with N parallel connections on a single account,
 plus a warm read-ahead buffer to keep playback smooth across seeks and pauses.
 
 > Architecture details: [docs/architecture.md](docs/architecture.md) ·
-> buffering: [docs/buffer-tuning.md](docs/buffer-tuning.md)
+> buffering: [docs/buffer-tuning.md](docs/buffer-tuning.md) ·
+> deep links and provider integration: [docs/deep-links.md](docs/deep-links.md) ·
+> hardware AES: [docs/hardware-aes.md](docs/hardware-aes.md)
 
 ## Benchmarks — streaming & decryption
 

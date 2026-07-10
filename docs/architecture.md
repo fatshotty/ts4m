@@ -5,10 +5,9 @@ app + Go engine), how they talk, and the main subsystems (streaming, players,
 buffering, login, update).
 
 > For specifics see the dedicated docs: playback buffers
-> ([buffer-tuning.md](buffer-tuning.md)), media-endpoint download
-> ([specs/2026-06-21-media-endpoint-download-design.md](superpowers/specs/2026-06-21-media-endpoint-download-design.md)),
-> 32-bit hardware AES
-> ([specs/2026-06-24-armv8-hardware-aes-32bit.md](superpowers/specs/2026-06-24-armv8-hardware-aes-32bit.md)).
+> ([buffer-tuning.md](buffer-tuning.md)), deep links and provider integration
+> ([deep-links.md](deep-links.md)), and 32-bit hardware AES
+> ([hardware-aes.md](hardware-aes.md)).
 
 ---
 
@@ -22,7 +21,9 @@ proxy. Typical use: TV box / phone.
 
 The canonical direct launch format is
 `tgstream://play?channel=<id>&messages=<m1-m2-...>`, with optional `title` and
-`pos` query parameters. It starts playback without source-app reporting.
+`pos` query parameters. It starts playback without source-app reporting. See
+[deep-links.md](deep-links.md) for the public contract and source-provider
+integration notes.
 
 Emby and Jellyfin are also supported through the same source adapter. The media
 server launches tgstream as an external player with its normal stream URL;
@@ -78,8 +79,9 @@ MTProto library: **`github.com/gotd/td` v0.111.0**. Session persisted to a file
    boundaries, up to `conns` in-flight RPCs (semaphore).
 3. **Media endpoint**: downloads use the DC's `MediaOnly` pool (unthrottled,
    ~10 MB/s per account) instead of the regular endpoint (throttled); automatic
-   fallback to the regular pool if `MediaOnly` fails. Per-DC pools are cached and
-   only ever grow, never torn down mid-stream.
+   fallback to the regular pool if `MediaOnly` fails. Per-DC pools are cached
+   and resized when the target connection count changes, without letting
+   seek/request cancellation tear down in-flight downloads.
 4. **Read-ahead / warm prefetch**: keeps up to ~128 MiB (8 × conns) pre-fetched
    to absorb the player's buffer pause/resume cycles without cooling the workers.
 5. **Robustness**: flood-wait backoff (up to 6 retries), refresh of expired
@@ -96,7 +98,8 @@ software-only, so in the patched gotd the IGE decrypt uses ARMv8 hardware AES vi
 cgo (~54× faster) when the CPU exposes the AES extension. Kotlin exposes this as
 `Tg.decryptHardwareStatus`, and Settings shows a non-blocking warning when
 hardware decrypt is unavailable or cannot be verified. CDN chunks use AES-CTR
-(Go stdlib).
+(Go stdlib). See [hardware-aes.md](hardware-aes.md) for implementation details,
+runtime behavior, and device notes.
 
 ---
 
@@ -195,4 +198,4 @@ and publishes to GitHub (`gh release create`) with both APKs + `version.json`.
 The engine AAR must be rebuilt first if the Go code changed.
 
 ---
-_Last updated: 2026-07-07._
+_Last updated: 2026-07-10._
