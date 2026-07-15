@@ -3,10 +3,10 @@ package tgengine
 import "runtime"
 
 const (
-	DecryptHardwareNative       = "native"
-	DecryptHardwarePatchedArm32 = "patched-arm32"
-	DecryptHardwareSoftware     = "software"
-	DecryptHardwareUnknown      = "unknown"
+	DecryptHardwareNative           = "native"
+	DecryptHardwareAcceleratedArm32 = "accelerated-arm32"
+	DecryptHardwareSoftware         = "software"
+	DecryptHardwareUnknown          = "unknown"
 )
 
 // DecryptHardwareStatus reports which AES decrypt path this build can use.
@@ -20,7 +20,7 @@ func decryptHardwareStatusForRuntime(arch string, arm32HW bool) string {
 		return DecryptHardwareNative
 	case "arm":
 		if arm32HW {
-			return DecryptHardwarePatchedArm32
+			return DecryptHardwareAcceleratedArm32
 		}
 		return DecryptHardwareSoftware
 	default:

@@ -10,7 +10,7 @@ func TestDecryptHardwareStatusForRuntime(t *testing.T) {
 		want  string
 	}{
 		{"arm64 uses standard library hardware AES", "arm64", false, DecryptHardwareNative},
-		{"arm with AES uses patched decrypt path", "arm", true, DecryptHardwarePatchedArm32},
+		{"arm with AES uses upstream accelerated decrypt path", "arm", true, "accelerated-arm32"},
 		{"arm without AES falls back to software", "arm", false, DecryptHardwareSoftware},
 		{"unknown arch is reported as unknown", "mips", false, DecryptHardwareUnknown},
 	}

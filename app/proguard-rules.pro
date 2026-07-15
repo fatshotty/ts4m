@@ -1,4 +1,4 @@
-# Keep Netty / Reactor / telegram4j internals (heavy reflection). Minify is off for now.
+# Keep Netty / Reactor / telegram4j internals quiet during release minification.
 -dontwarn io.netty.**
 -dontwarn reactor.**
 -dontwarn telegram4j.**

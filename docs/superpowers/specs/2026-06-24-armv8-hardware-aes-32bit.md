@@ -2,6 +2,9 @@
 
 Date: 2026-06-24 · Branch: `master` · Shipped: v0.1.34
 
+> Historical design. The local fork described below was replaced on 2026-07-15
+> by the upstream implementations in `gotd/ige` v0.3.0 and `gotd/td` v0.161.0.
+
 ## Problem
 
 High-bitrate playback (~95 Mbps 4K remux) stalls on a cheap Leelbox but plays

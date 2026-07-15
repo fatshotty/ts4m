@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# Builds the per-ABI debug APKs and publishes a GitHub Release that the in-app
+# Builds the per-ABI release APKs and publishes a GitHub Release that the in-app
 # updater consumes. versionCode = git commit count (matches build.gradle.kts).
 #
 # Requires: gh CLI authenticated (gh auth login), the tgengine AAR present
 # (run tgengine/build-aar.sh first if you changed the Go engine).
+# Release signing must be configured through environment variables or Gradle
+# properties:
+#   TGSTREAM_RELEASE_STORE_FILE
+#   TGSTREAM_RELEASE_STORE_PASSWORD
+#   TGSTREAM_RELEASE_KEY_ALIAS
+#   TGSTREAM_RELEASE_KEY_PASSWORD
 #
 # Usage:  ./release.sh ["release notes"]
 set -euo pipefail
@@ -18,7 +24,7 @@ REPO="fatshotty/ts4m"
 NOTES="${1:-}"
 
 VC="$(git rev-list --count HEAD)"
-VN="0.1.$VC"
+VN="${TGSTREAM_VERSION_NAME:-1.0.0}"
 TAG="v$VN"
 
 if [ -n "$(git status --porcelain)" ]; then
@@ -32,13 +38,40 @@ if [ ! -f app/libs/tgengine.aar ]; then
   bash tgengine/build-aar.sh
 fi
 
-echo "Building $TAG (versionCode=$VC)…"
-./gradlew :app:assembleDebug
+for abi in arm64-v8a armeabi-v7a; do
+  if ! unzip -l app/libs/tgengine.aar "jni/$abi/libgojni.so" >/dev/null; then
+    echo "tgengine.aar does not contain jni/$abi/libgojni.so."
+    echo "Run bash tgengine/build-aar.sh before publishing."
+    exit 1
+  fi
+done
 
-OUT="app/build/outputs/apk/debug"
+echo "Building $TAG (versionCode=$VC)…"
+./gradlew :app:assembleRelease -PtgstreamVersionCode="$VC" -PtgstreamVersionName="$VN"
+
+OUT="app/build/outputs/apk/release"
 WORK="$(mktemp -d)"
-cp "$OUT/app-arm64-v8a-debug.apk"   "$WORK/tgstream-arm64-v8a.apk"
-cp "$OUT/app-armeabi-v7a-debug.apk" "$WORK/tgstream-armeabi-v7a.apk"
+
+copy_release_apk() {
+  local abi="$1"
+  local src="$OUT/app-$abi-release.apk"
+  local unsigned="$OUT/app-$abi-release-unsigned.apk"
+  if [ -f "$src" ]; then
+    cp "$src" "$WORK/tgstream-$abi.apk"
+    return
+  fi
+  if [ -f "$unsigned" ]; then
+    echo "Refusing to publish unsigned release APK: $unsigned"
+    echo "Configure TGSTREAM_RELEASE_STORE_FILE, TGSTREAM_RELEASE_STORE_PASSWORD,"
+    echo "TGSTREAM_RELEASE_KEY_ALIAS, and TGSTREAM_RELEASE_KEY_PASSWORD."
+    exit 1
+  fi
+  echo "Missing release APK for $abi in $OUT."
+  exit 1
+}
+
+copy_release_apk arm64-v8a
+copy_release_apk armeabi-v7a
 python3 -c 'import json,sys; json.dump({"versionCode": int(sys.argv[1]), "versionName": sys.argv[2], "notes": sys.argv[3]}, sys.stdout); print()' "$VC" "$VN" "$NOTES" > "$WORK/version.json"
 
 echo "Publishing release ${TAG} to ${REPO} ..."

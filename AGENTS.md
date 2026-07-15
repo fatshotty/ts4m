@@ -11,7 +11,7 @@ an Android player. The app has two main parts:
   providers, players, updater, and the Kotlin wrapper around the Go engine.
 - `tgengine/`: Go MTProto engine compiled into `app/libs/tgengine.aar` with
   `gomobile bind`. It owns Telegram login/session, media fetching, the local
-  HTTP proxy, parallel chunk downloads, and the patched gotd fork.
+  HTTP proxy, parallel chunk downloads, and the upstream gotd dependencies.
 
 The video byte stream must stay out of JNI. Kotlin sends control calls to the Go
 engine; players read bytes from the engine's local HTTP proxy.
@@ -40,8 +40,8 @@ engine; players read bytes from the engine's local HTTP proxy.
 - `tgengine/engine.go`: engine lifecycle, login, and media clients.
 - `tgengine/stream.go`: `/stream` HTTP endpoint, range handling, dynamic
   connection selection, read-ahead pipeline.
-- `tgengine/third_party/gotd-td/`: local patched gotd copy, used through the
-  `replace` directive in `tgengine/go.mod`.
+- `tgengine/go.mod`: pins `github.com/gotd/td` and its upstream
+  `github.com/gotd/ige` AES-IGE implementation.
 - `docs/`: architecture and tuning notes. Treat code as source of truth when
   docs conflict with current implementation.
 - `TODO.local.md`: local ignored backlog. Do not commit it.
@@ -118,9 +118,8 @@ belong only in ignored local files or environment variables.
 - The media client pools in `tgengine` are shared per DC. Be careful with
   cancellation and pool resizing; request cancellation must not tear down the
   long-lived download context.
-- The local gotd fork is intentional. Changes under `tgengine/third_party/gotd-td`
-  affect Telegram transport/decryption behavior and should be tested on the
-  relevant ABI when possible.
+- Changes to the gotd dependency versions affect Telegram transport/decryption
+  behavior and should be tested on the relevant ABI when possible.
 - If changing `tgengine/stream.go`, bump `buildTag` so logs identify the running
   engine build.
 

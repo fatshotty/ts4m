@@ -45,9 +45,10 @@ decrypted on-device. On 64-bit boxes this is hardware-accelerated for free; on
 **32-bit (armeabi-v7a) boxes** Go's standard library falls back to *software*
 AES — which became the bottleneck for high-bitrate playback.
 
-We added an **ARMv8 hardware-AES** decrypt path (cgo, ARM crypto extension),
-runtime-gated with a software fallback and exposed in Settings as a warning when
-hardware decrypt is unavailable or cannot be verified. Measured **on a real 32-bit ARMv8 box**,
+Upstream **gotd/ige** provides an **ARMv8 hardware-AES** decrypt path (cgo, ARM
+crypto extension), runtime-gated with a software fallback and exposed in Settings
+as a warning when hardware decrypt is unavailable or cannot be verified. Measured
+**on a real 32-bit ARMv8 box**,
 decrypting AES-256-IGE on one core (output validated byte-for-byte against the
 software path):
 

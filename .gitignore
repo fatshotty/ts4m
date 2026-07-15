@@ -44,3 +44,4 @@ logapp*.txt
 
 # ─── Local-only notes / backlog (never committed) ───
 *.local.md
+docs/superpowers/

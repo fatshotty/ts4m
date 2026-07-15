@@ -1,4 +1,5 @@
-//go:build !arm
+//go:build !arm || !cgo || (!linux && !android)
+// +build !arm !cgo !linux,!android
 
 package tgengine
 

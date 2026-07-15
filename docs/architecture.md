@@ -58,7 +58,7 @@ stay internal to the engine.
 
 ## Go engine (`tgengine/`)
 
-MTProto library: **`github.com/gotd/td` v0.111.0**. Session persisted to a file
+MTProto library: **`github.com/gotd/td` v0.161.0**. Session persisted to a file
 (`session.FileStorage`).
 
 | File | Role |
@@ -68,7 +68,7 @@ MTProto library: **`github.com/gotd/td` v0.111.0**. Session persisted to a file
 | [resolve.go](../tgengine/resolve.go) | Channel resolution (Bot-API IDs → raw) and dialog sync to learn access hashes. |
 | [log.go](../tgengine/log.go) | Logging bridge to Kotlin (`Logger` implemented on the app side). |
 | [sendlog.go](../tgengine/sendlog.go) | Uploads the session log to Telegram "Saved Messages". |
-| [third_party/gotd-td/](../tgengine/third_party/gotd-td/) | Local patched copy of gotd/td (ARMv8 hardware AES on the IGE decrypt for 32-bit boxes; see the dedicated spec). Wired in via `replace` in [go.mod](../tgengine/go.mod). |
+| `github.com/gotd/ige` v0.3.0 | Upstream AES-IGE implementation used by gotd, including the ARMv8 hardware decrypt path for 32-bit ARM Linux and Android. |
 
 ### Streaming pipeline ([stream.go](../tgengine/stream.go))
 
@@ -92,8 +92,8 @@ MTProto library: **`github.com/gotd/td` v0.111.0**. Session persisted to a file
 
 All MTProto traffic is AES-256-IGE (handled by gotd). On **arm64** builds Go
 uses the stdlib's hardware AES; on **armeabi-v7a (32-bit)** the stdlib is
-software-only, so in the patched gotd the IGE decrypt uses ARMv8 hardware AES via
-cgo (~54× faster) when the CPU exposes the AES extension. Kotlin exposes this as
+software-only, so gotd/ige uses ARMv8 hardware AES via cgo (~54× faster) when
+the CPU exposes the AES extension. Kotlin exposes this as
 `Tg.decryptHardwareStatus`, and Settings shows a non-blocking warning when
 hardware decrypt is unavailable or cannot be verified. CDN chunks use AES-CTR
 (Go stdlib).

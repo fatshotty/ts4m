@@ -9,6 +9,29 @@ val commitCount: Int = runCatching {
     providers.exec { commandLine("git", "rev-list", "--count", "HEAD") }
         .standardOutput.asText.get().trim().toInt()
 }.getOrDefault(1)
+val tgstreamVersionCode: Int = providers.gradleProperty("tgstreamVersionCode")
+    .map { it.toInt() }
+    .getOrElse(commitCount)
+val tgstreamVersionName: String = providers.gradleProperty("tgstreamVersionName")
+    .getOrElse("0.1.$commitCount")
+val releaseStoreFilePath = providers.gradleProperty("TGSTREAM_RELEASE_STORE_FILE")
+    .orElse(providers.environmentVariable("TGSTREAM_RELEASE_STORE_FILE"))
+    .orNull
+val releaseStorePassword = providers.gradleProperty("TGSTREAM_RELEASE_STORE_PASSWORD")
+    .orElse(providers.environmentVariable("TGSTREAM_RELEASE_STORE_PASSWORD"))
+    .orNull
+val releaseKeyAlias = providers.gradleProperty("TGSTREAM_RELEASE_KEY_ALIAS")
+    .orElse(providers.environmentVariable("TGSTREAM_RELEASE_KEY_ALIAS"))
+    .orNull
+val releaseKeyPassword = providers.gradleProperty("TGSTREAM_RELEASE_KEY_PASSWORD")
+    .orElse(providers.environmentVariable("TGSTREAM_RELEASE_KEY_PASSWORD"))
+    .orNull
+val hasReleaseSigning = listOf(
+    releaseStoreFilePath,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
 
 android {
     namespace = "net.fatshotty.tgstream"
@@ -18,8 +41,8 @@ android {
         applicationId = "net.fatshotty.tgstream"
         minSdk = 24
         targetSdk = 36
-        versionCode = commitCount
-        versionName = "0.1.$commitCount"
+        versionCode = tgstreamVersionCode
+        versionName = tgstreamVersionName
 
         multiDexEnabled = true
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -42,9 +65,24 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseStoreFilePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
