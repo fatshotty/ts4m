@@ -3,9 +3,9 @@
 How the buffer levels (LOW / MID / HIGH / VHIGH / DYNAMIC) are computed and the
 MB ↔ seconds conversion tables. Applies to **both** player engines.
 
-Source of the values: [`BufferTuning.kt`](../app/src/main/java/net/fatshotty/tgstream/util/BufferTuning.kt)
+Source of the values: [`BufferTuning.kt`](../app/src/main/java/org/tgstream/app/util/BufferTuning.kt)
 → `exoBytes()` and `vlcCachingMs()`. User choice in Settings
-([`SettingsActivity.kt`](../app/src/main/java/net/fatshotty/tgstream/ui/SettingsActivity.kt)),
+([`SettingsActivity.kt`](../app/src/main/java/org/tgstream/app/ui/SettingsActivity.kt)),
 default **HIGH** (reproduces the smooth v0.1.20 behaviour on typical TV boxes).
 
 ## Principle
@@ -64,7 +64,7 @@ only binds at low bitrates.
 
 The byte cap grows with elapsed playback time, with an anti-stall floor that
 always keeps ≥15 s buffered. Implementation:
-[`DynamicLoadControl.kt`](../app/src/main/java/net/fatshotty/tgstream/player/DynamicLoadControl.kt).
+[`DynamicLoadControl.kt`](../app/src/main/java/org/tgstream/app/player/DynamicLoadControl.kt).
 
 | Playback time | Tier  | MB     | @80 Mb/s |
 |---------------|-------|-------:|---------:|

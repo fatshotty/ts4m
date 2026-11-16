@@ -34,10 +34,11 @@ val hasReleaseSigning = listOf(
 ).all { !it.isNullOrBlank() }
 
 android {
-    namespace = "net.fatshotty.tgstream"
+    namespace = "org.tgstream.app"
     compileSdk = 36
 
     defaultConfig {
+        // Keep the installed app identity so existing users can update in place.
         applicationId = "net.fatshotty.tgstream"
         minSdk = 24
         targetSdk = 36
@@ -147,4 +148,5 @@ dependencies {
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }

@@ -7,7 +7,7 @@ Guidance for AI/coding agents working in this repository.
 `tgstream` is an Android app that streams Telegram-hosted video files directly to
 an Android player. The app has two main parts:
 
-- `app/`: Android/Kotlin app (`net.fatshotty.tgstream`) for UI, settings,
+- `app/`: Android/Kotlin app (`org.tgstream.app`) for UI, settings,
   providers, players, updater, and the Kotlin wrapper around the Go engine.
 - `tgengine/`: Go MTProto engine compiled into `app/libs/tgengine.aar` with
   `gomobile bind`. It owns Telegram login/session, media fetching, the local
@@ -27,15 +27,15 @@ engine; players read bytes from the engine's local HTTP proxy.
 
 ## Important Paths
 
-- `app/src/main/java/net/fatshotty/tgstream/tg/Tg.kt`: Kotlin facade for the
+- `app/src/main/java/org/tgstream/app/tg/Tg.kt`: Kotlin facade for the
   gomobile-generated `tgengine` API.
-- `app/src/main/java/net/fatshotty/tgstream/ui/PlayerEntryActivity.kt`:
+- `app/src/main/java/org/tgstream/app/ui/PlayerEntryActivity.kt`:
   invisible external-player entry point.
-- `app/src/main/java/net/fatshotty/tgstream/provider/`: source-provider
+- `app/src/main/java/org/tgstream/app/provider/`: source-provider
   integrations. Emby is the current provider.
-- `app/src/main/java/net/fatshotty/tgstream/player/`: ExoPlayer and libVLC
+- `app/src/main/java/org/tgstream/app/player/`: ExoPlayer and libVLC
   activities plus dynamic ExoPlayer load control.
-- `app/src/main/java/net/fatshotty/tgstream/data/Settings.kt`: persisted app
+- `app/src/main/java/org/tgstream/app/data/Settings.kt`: persisted app
   settings.
 - `tgengine/engine.go`: engine lifecycle, login, and media clients.
 - `tgengine/stream.go`: `/stream` HTTP endpoint, range handling, dynamic

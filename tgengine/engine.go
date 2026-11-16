@@ -25,13 +25,16 @@ import (
 
 // Login states reported to LoginListener.OnState.
 const (
-	StateConnecting   = "CONNECTING"
-	StateNeedPhone    = "NEED_PHONE"
-	StateNeedCode     = "NEED_CODE"
-	StateNeedPassword = "NEED_PASSWORD"
-	StateAuthorized   = "AUTHORIZED"
-	StateError        = "ERROR"
-	StateLoggedOut    = "LOGGED_OUT"
+	StateConnecting      = "CONNECTING"
+	StateNeedLoginMethod = "NEED_LOGIN_METHOD"
+	StateWaitQR          = "WAIT_QR"
+	StateNeedPhone       = "NEED_PHONE"
+	StateNeedCode        = "NEED_CODE"
+	StateNeedPassword    = "NEED_PASSWORD"
+	StateAuthorized      = "AUTHORIZED"
+	StateError           = "ERROR"
+	StateLoggedOut       = "LOGGED_OUT"
+	StateLoggingOut      = "LOGGING_OUT"
 )
 
 // LoginListener receives auth state changes. Implemented in Kotlin.
@@ -45,20 +48,26 @@ type Engine struct {
 	apiHash string
 	session string // path to the gotd session file
 
-	mu       sync.Mutex
-	client   *telegram.Client
-	api      *tg.Client
-	peers    *peers.Manager
-	listener LoginListener
+	lifecycleMu  sync.Mutex
+	mu           sync.Mutex
+	client       *telegram.Client
+	api          *tg.Client
+	peers        *peers.Manager
+	listener     LoginListener
+	qrListener   QRLoginListener
+	loginUpdates chan struct{}
 
-	// login bridge channels (buffered, size 1)
-	phoneCh chan string
-	codeCh  chan string
-	pwdCh   chan string
+	// Authentication inputs belong to one cancelable attempt.
+	login *loginCoordinator
 
-	readyCh    chan struct{} // closed when api is ready
-	shutdownCh chan struct{} // closed to stop the client run loop
-	started    bool
+	started       bool
+	ready         bool
+	stopped       bool
+	loggingOut    bool
+	logoutPending bool
+	loggedOut     bool
+	runCancel     context.CancelFunc
+	runDone       chan struct{}
 
 	// Long-lived context for media downloads. Canceled only on Stop — never
 	// per-request, so finishing/aborting an HTTP request never cancels an
@@ -103,21 +112,19 @@ func NewEngine(apiID int, apiHash string, sessionFile string) *Engine {
 		apiHash = DefaultApiHash()
 	}
 	dlCtx, dlCancel := context.WithCancel(context.Background())
-	return &Engine{
+	e := &Engine{
 		apiID:       apiID,
 		apiHash:     apiHash,
 		session:     sessionFile,
-		phoneCh:     make(chan string, 1),
-		codeCh:      make(chan string, 1),
-		pwdCh:       make(chan string, 1),
-		readyCh:     make(chan struct{}),
-		shutdownCh:  make(chan struct{}),
 		docs:        make(map[string]*tg.Document),
 		docInflight: make(map[string]*docCall),
 		chanCache:   make(map[int64]tg.InputChannelClass),
 		dlCtx:       dlCtx,
 		dlCancel:    dlCancel,
 	}
+	e.login = newLoginCoordinator(e.setState)
+	e.loginUpdates = make(chan struct{}, 1)
+	return e
 }
 
 // SetLoginListener registers the state callback.
@@ -130,6 +137,9 @@ func (e *Engine) SetLoginListener(l LoginListener) {
 func (e *Engine) setState(state, msg string) {
 	e.mu.Lock()
 	l := e.listener
+	if (e.stopped || e.loggingOut) && state != StateLoggingOut && state != StateLoggedOut {
+		l = nil
+	}
 	e.mu.Unlock()
 	if l != nil {
 		l.OnState(state, msg)
@@ -140,16 +150,34 @@ func (e *Engine) setState(state, msg string) {
 // it drives the login flow via the SubmitPhone/Code/Password calls and reports
 // progress through the LoginListener. Safe to call once.
 func (e *Engine) Start() error {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
 	e.mu.Lock()
+	if e.stopped {
+		e.mu.Unlock()
+		return errors.New("engine has stopped; create a new engine")
+	}
 	if e.started {
 		e.mu.Unlock()
 		return nil
 	}
 	e.started = true
+	runCtx, runCancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	e.runCancel, e.runDone = runCancel, done
 	e.mu.Unlock()
 
+	dispatcher := tg.NewUpdateDispatcher()
+	dispatcher.OnLoginToken(func(ctx context.Context, _ tg.Entities, _ *tg.UpdateLoginToken) error {
+		select {
+		case e.loginUpdates <- struct{}{}:
+		default:
+		}
+		return nil
+	})
 	client := telegram.NewClient(e.apiID, e.apiHash, telegram.Options{
 		SessionStorage: &session.FileStorage{Path: e.session},
+		UpdateHandler:  dispatcher,
 		Logger:         logzap.New(zapLogger()),
 		// Weak 32-bit TV boxes (e.g. Leelbox L1) take much longer for the
 		// MTProto DH key exchange; the 15s default migration timeout is too
@@ -173,14 +201,25 @@ func (e *Engine) Start() error {
 			return nil
 		},
 	})
+	e.mu.Lock()
 	e.client = client
+	e.mu.Unlock()
 
 	go func() {
+		defer close(done)
+		defer runCancel()
 		e.setState(StateConnecting, "")
-		runErr := client.Run(context.Background(), func(ctx context.Context) error {
+		runErr := client.Run(runCtx, func(ctx context.Context) error {
 			flow := auth.NewFlow(bridgeAuth{e: e}, auth.SendCodeOptions{})
-			if err := client.Auth().IfNecessary(ctx, flow); err != nil {
-				e.setState(StateError, err.Error())
+			if err := e.login.run(ctx, func(ctx context.Context) (bool, error) {
+				s, err := client.Auth().Status(ctx)
+				if err != nil {
+					return false, err
+				}
+				return s.Authorized, nil
+			}, func(ctx context.Context) error { return flow.Run(ctx, phoneAuthClient{Client: client.Auth(), e: e}) },
+				func(ctx context.Context) error { return e.runQRLogin(ctx, client) }); err != nil {
+				e.setState(StateError, loginErrorMessage(err))
 				return err
 			}
 			e.mu.Lock()
@@ -194,22 +233,22 @@ func (e *Engine) Start() error {
 				logW("dialog sync warning: %v", err)
 			}
 
-			e.setState(StateAuthorized, "")
-			close(e.readyCh)
-
-			<-e.shutdownCh // keep the connection alive for streaming
-			return nil
-		})
-		if runErr != nil {
-			if !e.IsReady() {
-				e.mu.Lock()
-				e.started = false
-				e.client = nil
-				e.api = nil
-				e.peers = nil
+			e.mu.Lock()
+			if e.stopped || ctx.Err() != nil {
 				e.mu.Unlock()
+				return ctx.Err()
 			}
-			e.setState(StateError, runErr.Error())
+			e.ready = true
+			e.mu.Unlock()
+			e.setState(StateAuthorized, "")
+			<-ctx.Done() // keep the connection alive until stop or transport failure
+			return ctx.Err()
+		})
+		e.mu.Lock()
+		e.ready, e.started = false, false
+		e.mu.Unlock()
+		if runErr != nil && runCtx.Err() == nil {
+			e.setState(StateError, loginErrorMessage(runErr))
 		}
 	}()
 	return nil
@@ -217,72 +256,37 @@ func (e *Engine) Start() error {
 
 // IsReady reports whether the client is authorized and ready to stream.
 func (e *Engine) IsReady() bool {
-	select {
-	case <-e.readyCh:
-		return true
-	default:
-		return false
-	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.ready && !e.stopped && !e.loggingOut
 }
 
-// SubmitPhone provides the phone number (E.164, e.g. +39...) for login.
-func (e *Engine) SubmitPhone(phone string) { e.phoneCh <- phone }
-
-// SubmitCode provides the login code received via Telegram.
-func (e *Engine) SubmitCode(code string) { e.codeCh <- code }
-
-// SubmitPassword provides the 2FA password.
-func (e *Engine) SubmitPassword(pwd string) { e.pwdCh <- pwd }
-
-// Stop tears down the client run loop and proxy.
+// Stop cancels login/download work and waits until session writers have exited.
+// A stopped engine is terminal; create another engine for a subsequent login.
 func (e *Engine) Stop() {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	e.stopLocked()
+}
+
+func (e *Engine) stopLocked() {
+	e.mu.Lock()
+	e.stopped, e.ready = true, false
+	cancel, done, proxy := e.runCancel, e.runDone, e.proxy
+	e.mu.Unlock()
 	if e.dlCancel != nil {
 		e.dlCancel()
 	}
-	if e.proxy != nil {
-		e.proxy.stop()
+	if cancel != nil {
+		cancel()
+	}
+	if proxy != nil {
+		proxy.stop()
 	}
 	e.closeMedia()
-	select {
-	case <-e.shutdownCh:
-	default:
-		close(e.shutdownCh)
+	if done != nil {
+		<-done
 	}
-}
-
-func (e *Engine) recv(ch chan string, ctx context.Context) (string, error) {
-	select {
-	case v := <-ch:
-		return v, nil
-	case <-ctx.Done():
-		return "", ctx.Err()
-	}
-}
-
-// bridgeAuth feeds the gotd auth flow from the Submit* channels.
-type bridgeAuth struct{ e *Engine }
-
-func (b bridgeAuth) Phone(ctx context.Context) (string, error) {
-	b.e.setState(StateNeedPhone, "")
-	return b.e.recv(b.e.phoneCh, ctx)
-}
-
-func (b bridgeAuth) Code(ctx context.Context, _ *tg.AuthSentCode) (string, error) {
-	b.e.setState(StateNeedCode, "")
-	return b.e.recv(b.e.codeCh, ctx)
-}
-
-func (b bridgeAuth) Password(ctx context.Context) (string, error) {
-	b.e.setState(StateNeedPassword, "")
-	return b.e.recv(b.e.pwdCh, ctx)
-}
-
-func (b bridgeAuth) AcceptTermsOfService(_ context.Context, _ tg.HelpTermsOfService) error {
-	return nil
-}
-
-func (b bridgeAuth) SignUp(_ context.Context) (auth.UserInfo, error) {
-	return auth.UserInfo{}, errors.New("signup not supported")
 }
 
 // Ping returns a constant; used to verify the AAR loads and JNI works.

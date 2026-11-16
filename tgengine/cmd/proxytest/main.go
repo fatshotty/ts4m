@@ -3,11 +3,14 @@
 // Reuses an existing gotd session file (e.g. the one created by spike-gotd).
 //
 // Run:
-//   TG_API_ID=<id> TG_API_HASH=<hash> TG_SESSION=../../spike-gotd/spike-session.json \
-//     go run ./cmd/proxytest
+//
+//	TG_API_ID=<id> TG_API_HASH=<hash> TG_SESSION=../../spike-gotd/spike-session.json \
+//	  go run ./cmd/proxytest
+//
 // Then, from another shell:
-//   curl -s -D - -H "Range: bytes=0-1048575" \
-//     "http://127.0.0.1:<port>/stream?channel=<id>&messages=<m1-m2>&conns=3" -o /tmp/out.bin
+//
+//	curl -s -D - -H "Range: bytes=0-1048575" \
+//	  "http://127.0.0.1:<port>/stream?channel=<id>&messages=<m1-m2>&conns=3" -o /tmp/out.bin
 package main
 
 import (
@@ -20,11 +23,18 @@ import (
 	"tgstream/tgengine"
 )
 
-type listener struct{ in *bufio.Reader; e *tgengine.Engine }
+type listener struct {
+	in *bufio.Reader
+	e  *tgengine.Engine
+}
 
 func (l *listener) OnState(state, msg string) {
 	fmt.Printf("[state] %s %s\n", state, msg)
 	switch state {
+	case tgengine.StateNeedLoginMethod:
+		if err := l.e.SelectLoginMethod("phone"); err != nil {
+			fmt.Println("login selection failed:", err)
+		}
 	case tgengine.StateNeedPhone:
 		fmt.Print("phone (+39...): ")
 		s, _ := l.in.ReadString('\n')

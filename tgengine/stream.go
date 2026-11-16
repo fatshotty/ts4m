@@ -24,7 +24,7 @@ const (
 
 	// buildTag is stamped on every stream request so the log unambiguously
 	// identifies the running engine build. Bump it on every engine change.
-	buildTag = "media-7"
+	buildTag = "media-8-qr-login"
 )
 
 // proxyServer is the localhost HTTP server ExoPlayer streams from.
@@ -37,6 +37,11 @@ type proxyServer struct {
 
 // StartProxy starts the local HTTP proxy and returns the port it listens on.
 func (e *Engine) StartProxy() (int, error) {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	if !e.IsReady() {
+		return 0, fmt.Errorf("Telegram is not authorized")
+	}
 	if e.proxy != nil {
 		return e.proxy.port, nil
 	}
@@ -57,7 +62,9 @@ func (p *proxyServer) stop() {
 	if p.srv != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_ = p.srv.Shutdown(ctx)
+		if err := p.srv.Shutdown(ctx); err != nil {
+			_ = p.srv.Close()
+		}
 	}
 }
 

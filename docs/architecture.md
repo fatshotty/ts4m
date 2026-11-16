@@ -40,12 +40,12 @@ them in the given order and serves them as **one continuous stream**.
 
 | Part | Where | Role |
 |---|---|---|
-| **Android app (Kotlin)** | [app/src/main/java/net/fatshotty/tgstream/](../app/src/main/java/net/fatshotty/tgstream/) | UI, settings, players, updater |
+| **Android app (Kotlin)** | [app/src/main/java/org/tgstream/app/](../app/src/main/java/org/tgstream/app/) | UI, settings, players, updater |
 | **Go engine (`tgengine`)** | [tgengine/](../tgengine/) | MTProto client, streaming pipeline, HTTP proxy |
 
 They talk via **gomobile**: the Go engine is compiled into an AAR
 (`app/libs/tgengine.aar`, built with [tgengine/build-aar.sh](../tgengine/build-aar.sh))
-and wrapped on the Kotlin side by [Tg.kt](../app/src/main/java/net/fatshotty/tgstream/tg/Tg.kt).
+and wrapped on the Kotlin side by [Tg.kt](../app/src/main/java/org/tgstream/app/tg/Tg.kt).
 
 **JNI boundary discipline:** only control calls (login, start/stop) cross JNI;
 the **video bytes never do** — the Go engine exposes an **in-process HTTP proxy
@@ -63,7 +63,7 @@ MTProto library: **`github.com/gotd/td` v0.161.0**. Session persisted to a file
 
 | File | Role |
 |---|---|
-| [engine.go](../tgengine/engine.go) | `Engine` struct: MTProto + API clients, login state machine, per-DC media pools, document/channel caches, long-lived download context `dlCtx`. Public methods: `Start`, `IsReady`, `SubmitPhone/Code/Password`, `StartProxy`. |
+| [engine.go](../tgengine/engine.go) | `Engine` struct: MTProto + API clients, login state machine, per-DC media pools, document/channel caches, long-lived download context `dlCtx`. Public methods: `Start`, `IsReady`, `SelectLoginMethod`, `CancelLogin`, `SubmitPhone/Code/Password`, `Logout`, `StartProxy`. |
 | [stream.go](../tgengine/stream.go) | HTTP proxy + streaming pipeline (see below). |
 | [resolve.go](../tgengine/resolve.go) | Channel resolution (Bot-API IDs → raw) and dialog sync to learn access hashes. |
 | [log.go](../tgengine/log.go) | Logging bridge to Kotlin (`Logger` implemented on the app side). |
@@ -104,22 +104,22 @@ hardware decrypt is unavailable or cannot be verified. CDN chunks use AES-CTR
 
 Two engines, selected in Settings:
 
-- **ExoPlayer/Media3** (default) — [player/PlayerActivityExo.kt](../app/src/main/java/net/fatshotty/tgstream/player/PlayerActivityExo.kt).
+- **ExoPlayer/Media3** (default) — [player/PlayerActivityExo.kt](../app/src/main/java/org/tgstream/app/player/PlayerActivityExo.kt).
   D-pad-friendly controller, stats overlay (throughput/buffer/bitrate), scrubbing
   with debounced seek commit, hardware decoder (great HDR/Dolby Vision).
-- **libVLC** — [player/PlayerActivity.kt](../app/src/main/java/net/fatshotty/tgstream/player/PlayerActivity.kt).
+- **libVLC** — [player/PlayerActivity.kt](../app/src/main/java/org/tgstream/app/player/PlayerActivity.kt).
   For containers ExoPlayer can't handle (e.g. large OpenDML AVI); native-memory
   cache; hardware decode is enabled on real devices and disabled on emulators.
 
-**Buffering** ([util/BufferTuning.kt](../app/src/main/java/net/fatshotty/tgstream/util/BufferTuning.kt)):
+**Buffering** ([util/BufferTuning.kt](../app/src/main/java/org/tgstream/app/util/BufferTuning.kt)):
 LOW/MID/HIGH/VHIGH tiers (ExoPlayer fixes **MB**, libVLC fixes **seconds**), plus
 a **DYNAMIC** mode (ExoPlayer only) that ramps the cap over time
-([player/DynamicLoadControl.kt](../app/src/main/java/net/fatshotty/tgstream/player/DynamicLoadControl.kt)).
+([player/DynamicLoadControl.kt](../app/src/main/java/org/tgstream/app/player/DynamicLoadControl.kt)).
 Details and tables in [buffer-tuning.md](buffer-tuning.md).
 
 ---
 
-## Settings ([data/Settings.kt](../app/src/main/java/net/fatshotty/tgstream/data/Settings.kt), [ui/SettingsActivity.kt](../app/src/main/java/net/fatshotty/tgstream/ui/SettingsActivity.kt))
+## Settings ([data/Settings.kt](../app/src/main/java/org/tgstream/app/data/Settings.kt), [ui/SettingsActivity.kt](../app/src/main/java/org/tgstream/app/ui/SettingsActivity.kt))
 
 - **Connections per stream** (1–16, default 3)
 - **Player engine**: ExoPlayer / libVLC
@@ -136,29 +136,59 @@ never leave the device; no Keystore, for compatibility with odd devices).
 
 ## Login / auth
 
-[ui/LoginActivity.kt](../app/src/main/java/net/fatshotty/tgstream/ui/LoginActivity.kt)
-→ [Tg.kt](../app/src/main/java/net/fatshotty/tgstream/tg/Tg.kt) → `engine.Start()`.
-Standard gotd `auth.Flow`: phone (E.164) → SMS code → optional 2FA password, with
-values handed from Kotlin to Go over buffered channels. On success the session is
-persisted to a file (`filesDir/tg.session`); subsequent launches reconnect
-without re-logging in, and the HTTP proxy starts.
+[ui/LoginActivity.kt](../app/src/main/java/org/tgstream/app/ui/LoginActivity.kt)
+→ [Tg.kt](../app/src/main/java/org/tgstream/app/tg/Tg.kt) → `engine.Start()`.
+An existing session is restored automatically. Otherwise the user chooses
+QR login or phone/code login. API credentials are still required; the existing
+built-in defaults or user overrides apply to both methods.
+
+- **QR:** the Go engine receives login-token updates, exports tokens through
+  gotd's QR helper, renews at the server-provided expiry, and handles DC migration
+  and optional 2FA. A small transient PNG crosses JNI; the Android screen decodes
+  it off the main thread, preserves the white quiet zone, and hides expired codes.
+- **Phone:** standard gotd `auth.Flow`, with attempt-local phone/code/password
+  inputs and retry for an incorrect 2FA password. Password whitespace is preserved.
+- **Switching methods:** cancels and joins the old authentication attempt without
+  canceling the engine's long-lived media context. Repeated/stale input is rejected;
+  Telegram flood-wait delays survive returning to the selector.
+- **Account management:** Settings > Telegram account opens LoginActivity even
+  when already connected. It shows connection status and Log out. Login from this
+  screen stays in account management; Back returns to Settings. Unsaved Settings
+  edits survive this navigation and Activity recreation.
+- **Logout:** calls `auth.logOut` for this app's Telegram session, cancels engine,
+  proxy, and download work, waits for session writers to exit, then removes
+  `filesDir/tg.session`. A new login creates a fresh engine without an app restart.
+  Remote failure keeps the local session for retry; local-cleanup failure stays
+  disconnected and exposes a cleanup retry. App settings, API credentials, and
+  local playback history are retained. Other Telegram devices stay connected.
+
+On successful login the session is persisted to `filesDir/tg.session`, dialogs
+are synchronized, and the localhost HTTP proxy starts. Kotlin fences callbacks and
+proxy startup by engine generation so an old engine cannot become ready again
+after logout. QR images, token URLs, codes, and passwords are never logged or saved.
+
+Account UI device checks: QR scan/renewal/expiry, 2FA with incorrect-password
+retry, phone fallback and rapid switching, Back and background/recreation,
+Settings entry while connected/disconnected, logout failure/cleanup retry, and
+logout followed by login with another account. Verify saved-session restoration
+and playback/seek on arm64-v8a and armeabi-v7a when hardware is available.
 
 ---
 
 ## Invocation / entry point
 
-[PlayerEntryActivity.kt](../app/src/main/java/net/fatshotty/tgstream/ui/PlayerEntryActivity.kt)
+[PlayerEntryActivity.kt](../app/src/main/java/org/tgstream/app/ui/PlayerEntryActivity.kt)
 is the invisible entry point exported for `ACTION_VIEW`. It receives provider
-launch URLs, asks [ProviderRegistry.kt](../app/src/main/java/net/fatshotty/tgstream/provider/ProviderRegistry.kt)
+launch URLs, asks [ProviderRegistry.kt](../app/src/main/java/org/tgstream/app/provider/ProviderRegistry.kt)
 for a matching provider, resolves the launch into a `StreamSpec`, waits for the
 engine to be ready, and launches the chosen player.
 
 The provider registry currently contains:
 
-- [DirectProvider.kt](../app/src/main/java/net/fatshotty/tgstream/provider/DirectProvider.kt):
+- [DirectProvider.kt](../app/src/main/java/org/tgstream/app/provider/DirectProvider.kt):
   handles canonical `tgstream://play?...` links and returns
   `ReportingContext(kind = "none")`.
-- [EmbyProvider.kt](../app/src/main/java/net/fatshotty/tgstream/provider/EmbyProvider.kt):
+- [EmbyProvider.kt](../app/src/main/java/org/tgstream/app/provider/EmbyProvider.kt):
   extracts the Emby/Jellyfin server base, item id, token, and playback session
   metadata from the launch URL, resolves the item's `.strm` path, and parses a
   `#tgstream/...` fragment directive into the Telegram stream spec. Explicit
@@ -176,7 +206,7 @@ or a player-completion event), tgstream also calls the explicit played-state API
 (`MarkPlayedItem`) so the source server marks the item watched even if playback
 is stopped during credits.
 
-[DirectLinkCodec.kt](../app/src/main/java/net/fatshotty/tgstream/provider/DirectLinkCodec.kt)
+[DirectLinkCodec.kt](../app/src/main/java/org/tgstream/app/provider/DirectLinkCodec.kt)
 owns the canonical direct-link parsing and normalization logic used by direct
 links and future source adapters.
 
@@ -184,7 +214,7 @@ links and future source adapters.
 
 ## Updates
 
-In-app updater ([update/Updater.kt](../app/src/main/java/net/fatshotty/tgstream/update/Updater.kt)):
+In-app updater ([update/Updater.kt](../app/src/main/java/org/tgstream/app/update/Updater.kt)):
 checks the `fatshotty/ts4m` GitHub Releases, compares `versionCode`, downloads
 the right-ABI APK (arm64-v8a / armeabi-v7a), and hands it to the system
 installer.
@@ -196,3 +226,16 @@ The engine AAR must be rebuilt first if the Go code changed.
 
 ---
 _Last updated: 2026-07-07._
+
+## Android Package and Update Identity
+
+Kotlin sources and the Gradle namespace use `org.tgstream.app`. The installed
+`applicationId` deliberately remains `net.fatshotty.tgstream`; changing it would
+create a different app instead of updating existing installations. The
+FileProvider authority continues to derive from this application ID.
+
+Manifest activity aliases retain the historical launcher and external-player
+component names so saved Android shortcuts and explicit app integrations keep
+working. Release APKs must retain the established signing certificate, increase
+`versionCode`, and keep the updater asset names `tgstream-arm64-v8a.apk`,
+`tgstream-armeabi-v7a.apk`, and `version.json`.

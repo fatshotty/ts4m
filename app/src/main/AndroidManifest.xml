@@ -28,13 +28,19 @@
 
         <activity
             android:name=".ui.MainActivity"
+            android:exported="true" />
+
+        <!-- Preserve installed launcher shortcuts across the Kotlin package rename. -->
+        <activity-alias
+            android:name="net.fatshotty.tgstream.ui.MainActivity"
+            android:targetActivity=".ui.MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
-        </activity>
+        </activity-alias>
 
         <activity
             android:name=".ui.LoginActivity"
@@ -79,6 +85,12 @@
                 <data android:mimeType="video/*" />
             </intent-filter>
         </activity>
+
+        <!-- Existing external apps may have saved this explicit component name. -->
+        <activity-alias
+            android:name="net.fatshotty.tgstream.ui.PlayerEntryActivity"
+            android:targetActivity=".ui.PlayerEntryActivity"
+            android:exported="true" />
 
         <activity
             android:name=".player.PlayerActivity"
