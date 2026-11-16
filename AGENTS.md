@@ -41,7 +41,8 @@ engine; players read bytes from the engine's local HTTP proxy.
 - `tgengine/stream.go`: `/stream` HTTP endpoint, range handling, dynamic
   connection selection, read-ahead pipeline.
 - `tgengine/go.mod`: pins `github.com/gotd/td` and its upstream
-  `github.com/gotd/ige` AES-IGE implementation.
+  `github.com/gotd/ige` AES-IGE implementation. A pinned `fatshotty/td` fork
+  replacement fixes connection-pool atomic alignment on ARM32.
 - `docs/`: architecture and tuning notes. Treat code as source of truth when
   docs conflict with current implementation.
 - `TODO.local.md`: local ignored backlog. Do not commit it.

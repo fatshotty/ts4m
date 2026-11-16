@@ -8,6 +8,7 @@ require (
 	github.com/gotd/log/logzap v0.1.1
 	github.com/gotd/td v0.161.0
 	go.uber.org/zap v1.28.0
+	rsc.io/qr v0.2.0
 )
 
 require (
@@ -49,5 +50,8 @@ require (
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/tools v0.48.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	rsc.io/qr v0.2.0 // indirect
 )
+
+// ARM32 pool alignment fix based on upstream v0.161.0.
+// The pseudo-version prefix follows the fork's older tags.
+replace github.com/gotd/td => github.com/fatshotty/td v0.159.1-0.20261116110244-96051db424bf

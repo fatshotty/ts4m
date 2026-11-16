@@ -58,8 +58,11 @@ stay internal to the engine.
 
 ## Go engine (`tgengine/`)
 
-MTProto library: **`github.com/gotd/td` v0.161.0**. Session persisted to a file
-(`session.FileStorage`).
+MTProto library: **`github.com/gotd/td` v0.161.0**, replaced by the pinned
+[`fatshotty/td` fix](https://github.com/fatshotty/td/commit/96051db424bfdc00f1904242a0bb656d6920ea71)
+for ARM32 connection-pool atomic alignment. The fork uses the standard Go
+`sync/atomic.Int64` counter so logger layout changes cannot misalign its 64-bit
+operations. Session persisted to a file (`session.FileStorage`).
 
 | File | Role |
 |---|---|

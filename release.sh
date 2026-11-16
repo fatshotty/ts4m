@@ -80,6 +80,7 @@ gh release create "$TAG" \
   "$WORK/tgstream-armeabi-v7a.apk" \
   "$WORK/version.json" \
   --repo "$REPO" \
+  --target "$(git rev-parse HEAD)" \
   --title "$TAG" \
   --notes "${NOTES:-tgstream $TAG}"
 
